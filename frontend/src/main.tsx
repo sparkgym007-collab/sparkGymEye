@@ -54,18 +54,20 @@ type Payment = {
   receipt: string;
 };
 
-type MemberForm = Omit<Member, "id" | "daysOverdue" | "status">;
+type MemberForm = Omit<Member, "id" | "rollNo" | "daysOverdue" | "status"> & {
+  paymentDate: string;
+};
 
 const today = new Date("2026-08-26T00:00:00");
 
 const emptyForm: MemberForm = {
-  rollNo: "",
   name: "",
   phone: "",
   plan: "1 Month",
-  dueDate: "2026-09-26",
-  amountDue: 1500,
-  paidUpTo: "2026-08-26",
+  dueDate: plusMonths("2026-08-26", 1),
+  amountDue: 600,
+  paidUpTo: plusMonths("2026-08-26", 1),
+  paymentDate: "2026-08-26",
 };
 
 function money(value: number) {
@@ -106,12 +108,22 @@ function getStatus(dueDate: string, amountDue: number): Pick<Member, "status" | 
   return { status: "Active", daysOverdue: 0 };
 }
 
-function normalizeMember(member: MemberForm, id: number): Member {
+function nextRollNo(members: Member[]) {
+  const highest = members.reduce((max, member) => {
+    const value = Number(member.rollNo.replace(/\D/g, ""));
+    return Number.isFinite(value) ? Math.max(max, value) : max;
+  }, 0);
+  return `SP-${String(highest + 1).padStart(3, "0")}`;
+}
+
+function normalizeMember(member: MemberForm, id: number, rollNo: string): Member {
+  const { paymentDate: _paymentDate, ...memberFields } = member;
   return {
     id,
-    ...member,
-    amountDue: Number(member.amountDue),
-    ...getStatus(member.dueDate, Number(member.amountDue)),
+    rollNo,
+    ...memberFields,
+    amountDue: Number(memberFields.amountDue),
+    ...getStatus(memberFields.dueDate, Number(memberFields.amountDue)),
   };
 }
 
@@ -123,21 +135,24 @@ function plusMonths(date: string, months: number) {
 
 function App() {
   const [members, setMembers] = useState<Member[]>(() =>
-    initialMembers.map((member, index) => normalizeMember(member, index + 1))
+    initialMembers.map((member, index) => normalizeMember({ ...member, paymentDate: member.paidUpTo }, index + 1, member.rollNo))
   );
   const [payments, setPayments] = useState<Payment[]>(initialPayments);
   const [query, setQuery] = useState("");
   const [dialog, setDialog] = useState<"add" | "edit" | "payment" | null>(null);
   const [selectedMember, setSelectedMember] = useState<Member | null>(null);
   const [form, setForm] = useState<MemberForm>(emptyForm);
-  const [paymentAmount, setPaymentAmount] = useState(1500);
+  const [paymentAmount, setPaymentAmount] = useState(600);
   const [paymentMode, setPaymentMode] = useState<Payment["mode"]>("UPI");
+  const [paymentDate, setPaymentDate] = useState(today.toISOString().slice(0, 10));
+  const [paymentPlan, setPaymentPlan] = useState("1 Month");
+  const [paymentSearch, setPaymentSearch] = useState("");
 
   const filteredMembers = useMemo(() => {
     const term = query.trim().toLowerCase();
     if (!term) return members;
     return members.filter((member) =>
-      [member.name, member.phone, member.rollNo, member.plan].some((value) => value.toLowerCase().includes(term))
+      [member.name, member.phone, member.plan].some((value) => value.toLowerCase().includes(term))
     );
   }, [members, query]);
 
@@ -162,13 +177,13 @@ function App() {
   function openEdit(member: Member) {
     setSelectedMember(member);
     setForm({
-      rollNo: member.rollNo,
       name: member.name,
       phone: member.phone,
       plan: member.plan,
       dueDate: member.dueDate,
       amountDue: member.amountDue,
       paidUpTo: member.paidUpTo,
+      paymentDate: today.toISOString().slice(0, 10),
     });
     setDialog("edit");
   }
@@ -176,8 +191,12 @@ function App() {
   function openPayment(member?: Member) {
     const target = member ?? overdueMembers[0] ?? members[0];
     setSelectedMember(target);
-    setPaymentAmount(target?.amountDue || 1500);
+    const plan = plans.find((item) => item.name === target?.plan) ?? plans[0];
+    setPaymentAmount(target?.amountDue || plan.amount);
     setPaymentMode("UPI");
+    setPaymentDate(today.toISOString().slice(0, 10));
+    setPaymentPlan(target?.plan ?? plans[0].name);
+    setPaymentSearch(target ? `${target.name} ${target.phone}` : "");
     setDialog("payment");
   }
 
@@ -185,11 +204,11 @@ function App() {
     event.preventDefault();
     if (dialog === "edit" && selectedMember) {
       setMembers((current) =>
-        current.map((member) => (member.id === selectedMember.id ? normalizeMember(form, selectedMember.id) : member))
+        current.map((member) => (member.id === selectedMember.id ? normalizeMember(form, selectedMember.id, member.rollNo) : member))
       );
     } else {
       const nextId = Math.max(0, ...members.map((member) => member.id)) + 1;
-      setMembers((current) => [normalizeMember(form, nextId), ...current]);
+      setMembers((current) => [normalizeMember(form, nextId, nextRollNo(current)), ...current]);
     }
     setDialog(null);
   }
@@ -201,13 +220,13 @@ function App() {
   function recordPayment(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!selectedMember) return;
-    const plan = plans.find((item) => item.name === selectedMember.plan) ?? plans[0];
-    const paidAt = today.toISOString().slice(0, 10);
+    const plan = plans.find((item) => item.name === paymentPlan) ?? plans[0];
+    const paidAt = paymentDate;
     const paidUpTo = plusMonths(paidAt, plan.months);
     setMembers((current) =>
       current.map((member) =>
         member.id === selectedMember.id
-          ? normalizeMember({ ...member, amountDue: Math.max(0, member.amountDue - paymentAmount), paidUpTo, dueDate: paidUpTo }, member.id)
+          ? normalizeMember({ ...member, plan: paymentPlan, amountDue: Math.max(0, member.amountDue - paymentAmount), paymentDate: paidAt, paidUpTo, dueDate: paidUpTo }, member.id, member.rollNo)
           : member
       )
     );
@@ -216,7 +235,7 @@ function App() {
         id: Date.now(),
         memberName: selectedMember.name,
         rollNo: selectedMember.rollNo,
-        plan: selectedMember.plan,
+        plan: paymentPlan,
         amount: paymentAmount,
         paymentDate: paidAt,
         mode: paymentMode,
@@ -229,10 +248,9 @@ function App() {
 
   function exportCsv() {
     const rows = [
-      ["Name", "Roll No", "Phone", "Plan", "Due Date", "Amount", "Paid Up To", "Days Overdue"],
+      ["Name", "Phone", "Plan", "Payment Due", "Amount", "Paid Up To", "Days Overdue"],
       ...overdueMembers.map((member) => [
         member.name,
-        member.rollNo,
         member.phone,
         member.plan,
         member.dueDate,
@@ -256,6 +274,14 @@ function App() {
         <Sidebar />
         <section className="desktop-dashboard">
           <Topbar query={query} setQuery={setQuery} />
+          {query.trim() && (
+            <SearchResults
+              members={filteredMembers}
+              onPay={openPayment}
+              onEdit={openEdit}
+              onClear={() => setQuery("")}
+            />
+          )}
           <div className="desktop-title">
             <div>
               <h2>Dashboard</h2>
@@ -263,7 +289,7 @@ function App() {
             </div>
             <div className="actions">
               <button onClick={openAdd}><UserPlus size={17} /> Add Member</button>
-              <button className="primary" onClick={() => openPayment()}><Plus size={18} /> Record Payment</button>
+              <button className="primary" onClick={() => openPayment()}><Plus size={18} /> Add Payment</button>
             </div>
           </div>
 
@@ -323,8 +349,21 @@ function App() {
                 selectedMember={selectedMember}
                 paymentAmount={paymentAmount}
                 paymentMode={paymentMode}
+                paymentDate={paymentDate}
+                paymentPlan={paymentPlan}
+                paymentSearch={paymentSearch}
+                members={members}
+                paidUpTo={plusMonths(paymentDate, plans.find((item) => item.name === paymentPlan)?.months ?? 1)}
                 setPaymentAmount={setPaymentAmount}
                 setPaymentMode={setPaymentMode}
+                setPaymentDate={setPaymentDate}
+                setPaymentPlan={(planName) => {
+                  const plan = plans.find((item) => item.name === planName) ?? plans[0];
+                  setPaymentPlan(plan.name);
+                  setPaymentAmount(plan.amount);
+                }}
+                setPaymentSearch={setPaymentSearch}
+                setSelectedMember={setSelectedMember}
                 onSubmit={recordPayment}
               />
             ) : (
@@ -373,7 +412,7 @@ function Topbar({ query, setQuery }: { query: string; setQuery: (value: string) 
     <header className="topbar">
       <label className="search-field">
         <Search size={17} />
-        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search members by name, phone or roll no..." />
+        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search members by name or phone..." />
         <kbd>Ctrl</kbd><kbd>K</kbd>
       </label>
       <button className="icon-btn" aria-label="Notifications"><Bell size={18} /><span>3</span></button>
@@ -382,6 +421,44 @@ function Topbar({ query, setQuery }: { query: string; setQuery: (value: string) 
         <div><strong>Trainer</strong><small>+91 98765 43210</small></div>
       </div>
     </header>
+  );
+}
+
+function SearchResults({
+  members,
+  onPay,
+  onEdit,
+  onClear,
+}: {
+  members: Member[];
+  onPay: (member: Member) => void;
+  onEdit: (member: Member) => void;
+  onClear: () => void;
+}) {
+  return (
+    <section className="search-results" aria-live="polite">
+      <div className="panel-head">
+        <h3>Search Results</h3>
+        <button className="ghost" onClick={onClear}>Clear</button>
+      </div>
+      {members.length === 0 ? (
+        <p>No member found. Try another name or phone number.</p>
+      ) : (
+        <div className="search-result-list">
+          {members.slice(0, 6).map((member) => (
+            <article key={member.id}>
+              <div className="avatar">{initials(member.name)}</div>
+              <div>
+                <strong>{member.name}</strong>
+                <span>{member.phone} · {member.plan} · {money(member.amountDue)}</span>
+              </div>
+              <button onClick={() => onPay(member)}><CreditCard size={15} /> Add Payment</button>
+              <button onClick={() => onEdit(member)}><Edit3 size={15} /> Edit</button>
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -501,13 +578,12 @@ function MembersTable({
       <div className="table-wrap">
         <table>
           <thead>
-            <tr><th>Name</th><th>Roll No.</th><th>Phone</th><th>Plan</th><th>Due Date</th><th>Amount</th><th>Paid Up To</th><th>Days Overdue</th><th>Action</th></tr>
+            <tr><th>Name</th><th>Phone</th><th>Plan</th><th>Payment Due</th><th>Amount</th><th>Paid Up To</th><th>Days Overdue</th><th>Action</th></tr>
           </thead>
           <tbody>
             {members.map((member) => (
               <tr key={member.id}>
                 <td>{member.name}</td>
-                <td>{member.rollNo}</td>
                 <td>{member.phone}</td>
                 <td>{member.plan}</td>
                 <td>{prettyDate(member.dueDate)}</td>
@@ -516,7 +592,7 @@ function MembersTable({
                 <td className={member.daysOverdue > 0 ? "danger" : ""}>{member.daysOverdue > 0 ? `${member.daysOverdue} days` : "-"}</td>
                 <td>
                   <div className="row-actions">
-                    <button onClick={() => onPay(member)} aria-label={`Record payment for ${member.name}`}><CreditCard size={15} /></button>
+                    <button onClick={() => onPay(member)} aria-label={`Add payment for ${member.name}`}><CreditCard size={15} /></button>
                     <button onClick={() => onEdit(member)} aria-label={`Edit ${member.name}`}><Edit3 size={15} /></button>
                     <button className="delete" onClick={() => onDelete(member.id)} aria-label={`Delete ${member.name}`}><Trash2 size={15} /></button>
                   </div>
@@ -604,8 +680,23 @@ function MobileDashboard({
 
       <label className="mobile-search">
         <Search size={17} />
-        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search member, phone, roll no..." />
+        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search member or phone..." />
       </label>
+      {query.trim() && (
+        <section className="mobile-search-results">
+          {members.length === 0 ? (
+            <p>No member found.</p>
+          ) : (
+            members.slice(0, 4).map((member) => (
+              <button key={member.id} onClick={() => onPay(member)}>
+                <span>{member.name}</span>
+                <small>{member.phone}</small>
+                <b>{money(member.amountDue)}</b>
+              </button>
+            ))
+          )}
+        </section>
+      )}
 
       <section className="mobile-trainer">
         <img alt="Trainer profile" src="https://images.unsplash.com/photo-1568602471122-7832951cc4c5?auto=format&fit=crop&w=90&q=80" />
@@ -625,7 +716,7 @@ function MobileDashboard({
         <MiniStat label="Collection" value={money(monthlyCollection)} icon={<WalletCards />} tone="lime" />
       </section>
 
-      <button className="mobile-primary" onClick={() => onPay()}><Plus size={19} /> Record Payment</button>
+      <button className="mobile-primary" onClick={() => onPay()}><Plus size={19} /> Add Payment</button>
       <button className="mobile-secondary" onClick={onAdd}><UserPlus size={18} /> Add Member</button>
 
       <OverdueSummary buckets={overdueBuckets} overdueCount={overdueMembers.length} />
@@ -637,7 +728,7 @@ function MobileDashboard({
             <div className="avatar">{initials(member.name)}</div>
             <div>
               <strong>{member.name}</strong>
-              <span>{member.rollNo} · {member.phone}</span>
+              <span>{member.phone}</span>
             </div>
             <b>{member.daysOverdue}d</b>
             <strong>{money(member.amountDue)}</strong>
@@ -682,18 +773,28 @@ function MemberEditor({
   setForm: React.Dispatch<React.SetStateAction<MemberForm>>;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }) {
+  function applyPlan(planName: string, paymentDate = form.paymentDate) {
+    const plan = plans.find((item) => item.name === planName) ?? plans[0];
+    const paidUpTo = plusMonths(paymentDate, plan.months);
+    setForm({ ...form, plan: plan.name, amountDue: plan.amount, paymentDate, paidUpTo, dueDate: paidUpTo });
+  }
+
+  function applyPaymentDate(paymentDate: string) {
+    const plan = plans.find((item) => item.name === form.plan) ?? plans[0];
+    const paidUpTo = plusMonths(paymentDate, plan.months);
+    setForm({ ...form, paymentDate, paidUpTo, dueDate: paidUpTo });
+  }
+
   return (
     <form className="editor-form" onSubmit={onSubmit}>
       <h3>{mode === "add" ? "Add Member" : "Edit Member"}</h3>
       <label>Name<input required value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></label>
-      <label>Roll No.<input required value={form.rollNo} onChange={(event) => setForm({ ...form, rollNo: event.target.value })} /></label>
       <label>Phone<input required value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} /></label>
       <label>Plan<select value={form.plan} onChange={(event) => {
-        const plan = plans.find((item) => item.name === event.target.value) ?? plans[0];
-        setForm({ ...form, plan: plan.name, amountDue: plan.amount });
+        applyPlan(event.target.value);
       }}>{plans.map((plan) => <option key={plan.name}>{plan.name}</option>)}</select></label>
-      <label>Due Date<input type="date" required value={form.dueDate} onChange={(event) => setForm({ ...form, dueDate: event.target.value })} /></label>
-      <label>Paid Up To<input type="date" required value={form.paidUpTo} onChange={(event) => setForm({ ...form, paidUpTo: event.target.value })} /></label>
+      <label>Payment Date<input type="date" required value={form.paymentDate} onChange={(event) => applyPaymentDate(event.target.value)} /></label>
+      <label>Paid Up To<input type="date" required value={form.paidUpTo} readOnly /></label>
       <label>Amount Due<input type="number" min="0" required value={form.amountDue} onChange={(event) => setForm({ ...form, amountDue: Number(event.target.value) })} /></label>
       <button className="primary" type="submit">{mode === "add" ? "Create Member" : "Save Changes"}</button>
     </form>
@@ -704,23 +805,80 @@ function PaymentForm({
   selectedMember,
   paymentAmount,
   paymentMode,
+  paymentDate,
+  paymentPlan,
+  paymentSearch,
+  members,
+  paidUpTo,
   setPaymentAmount,
   setPaymentMode,
+  setPaymentDate,
+  setPaymentPlan,
+  setPaymentSearch,
+  setSelectedMember,
   onSubmit,
 }: {
   selectedMember: Member | null;
   paymentAmount: number;
   paymentMode: Payment["mode"];
+  paymentDate: string;
+  paymentPlan: string;
+  paymentSearch: string;
+  members: Member[];
+  paidUpTo: string;
   setPaymentAmount: (value: number) => void;
   setPaymentMode: (value: Payment["mode"]) => void;
+  setPaymentDate: (value: string) => void;
+  setPaymentPlan: (value: string) => void;
+  setPaymentSearch: (value: string) => void;
+  setSelectedMember: (member: Member | null) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }) {
+  const searchTerm = paymentSearch.trim().toLowerCase();
+  const matchedMembers = searchTerm
+    ? members.filter((member) =>
+        [member.name, member.phone].some((value) => value.toLowerCase().includes(searchTerm))
+      )
+    : members.slice(0, 5);
+
   return (
     <form className="editor-form" onSubmit={onSubmit}>
-      <h3>Record Payment</h3>
-      <p>{selectedMember ? `${selectedMember.name} · ${selectedMember.rollNo}` : "Select a member from the overdue list"}</p>
+      <h3>Add Payment</h3>
+      <p>{selectedMember ? `${selectedMember.name} · ${selectedMember.phone}` : "Search and select a member first"}</p>
+      <label className="full-field">Search Member
+        <input
+          value={paymentSearch}
+          onChange={(event) => {
+            setPaymentSearch(event.target.value);
+            setSelectedMember(null);
+          }}
+          placeholder="Search by member name or phone number"
+        />
+      </label>
+      <div className="member-picker">
+        {matchedMembers.slice(0, 5).map((member) => (
+          <button
+            type="button"
+            className={selectedMember?.id === member.id ? "selected" : ""}
+            key={member.id}
+            onClick={() => {
+              const plan = plans.find((item) => item.name === member.plan) ?? plans[0];
+              setSelectedMember(member);
+              setPaymentSearch(`${member.name} ${member.phone}`);
+              setPaymentPlan(plan.name);
+              setPaymentAmount(member.amountDue || plan.amount);
+            }}
+          >
+            <span>{member.name}</span>
+            <small>{member.phone}</small>
+          </button>
+        ))}
+      </div>
+      <label>Payment Date<input type="date" required value={paymentDate} onChange={(event) => setPaymentDate(event.target.value)} /></label>
+      <label>Plan<select value={paymentPlan} onChange={(event) => setPaymentPlan(event.target.value)}>{plans.map((plan) => <option key={plan.name}>{plan.name}</option>)}</select></label>
       <label>Amount<input type="number" min="1" required value={paymentAmount} onChange={(event) => setPaymentAmount(Number(event.target.value))} /></label>
       <label>Payment Mode<select value={paymentMode} onChange={(event) => setPaymentMode(event.target.value as Payment["mode"])}><option>UPI</option><option>Cash</option><option>Card</option></select></label>
+      <label>Paid Up To<input type="date" value={paidUpTo} readOnly /></label>
       <button className="primary" type="submit" disabled={!selectedMember}>Save Payment</button>
     </form>
   );

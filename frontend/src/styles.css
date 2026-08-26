@@ -54,10 +54,22 @@ p {
   gap: 25px;
   border-right: 1px solid #1d3440;
   background:
-    linear-gradient(180deg, rgba(5, 13, 18, 0.98), rgba(3, 8, 11, 0.98)),
-    url("https://images.unsplash.com/photo-1581009146145-b5ef050c2e1e?auto=format&fit=crop&w=560&q=70");
+    linear-gradient(180deg, rgba(5, 13, 18, 0.88), rgba(3, 8, 11, 0.78) 48%, rgba(3, 8, 11, 0.92)),
+    url("https://res.cloudinary.com/wsgsjtrj/image/upload/v1787749514/ChatGPT_Image_Aug_26_2026_06_34_20_PM.png");
   background-size: cover;
-  background-position: center bottom;
+  background-position: 55% bottom;
+  background-repeat: no-repeat;
+  overflow: hidden;
+}
+
+.sidebar::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background:
+    radial-gradient(circle at 70% 82%, rgba(223, 255, 0, 0.2), transparent 28%),
+    linear-gradient(90deg, rgba(2, 7, 11, 0.65), rgba(2, 7, 11, 0.2));
 }
 
 .brand {
@@ -137,7 +149,7 @@ p {
   border-radius: 8px;
   background:
     linear-gradient(180deg, rgba(3, 9, 12, 0.12), rgba(3, 9, 12, 0.92)),
-    url("https://images.unsplash.com/photo-1532029837206-abbe2b7620e3?auto=format&fit=crop&w=560&q=72");
+    url("https://res.cloudinary.com/wsgsjtrj/image/upload/v1787749514/ChatGPT_Image_Aug_26_2026_06_34_20_PM.png");
   background-size: cover;
   background-position: center;
 }
@@ -192,8 +204,95 @@ p {
   color: #dfff00;
 }
 
+.mobile-search-results {
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.mobile-search-results button {
+  min-height: 48px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  text-align: left;
+}
+
+.mobile-search-results button span,
+.mobile-search-results button small {
+  grid-column: 1;
+}
+
+.mobile-search-results button b {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  color: #dfff00;
+}
+
 .search-field {
   max-width: 500px;
+}
+
+.search-results,
+.mobile-search-results {
+  border: 1px solid #203743;
+  border-radius: 8px;
+  background:
+    radial-gradient(circle at 92% 0%, rgba(223, 255, 0, 0.08), transparent 34%),
+    rgba(4, 12, 18, 0.96);
+  box-shadow: 0 18px 45px rgba(0, 0, 0, 0.28);
+}
+
+.search-results {
+  max-width: 780px;
+  padding: 14px;
+}
+
+.search-results p,
+.mobile-search-results p {
+  color: #9faab2;
+  margin-top: 10px;
+}
+
+.search-result-list {
+  margin-top: 12px;
+  display: grid;
+  gap: 9px;
+}
+
+.search-result-list article {
+  min-height: 58px;
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) auto auto;
+  gap: 10px;
+  align-items: center;
+  padding: 9px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 8px;
+  background: rgba(8, 18, 27, 0.8);
+}
+
+.search-result-list span {
+  display: block;
+  margin-top: 3px;
+  color: #9faab2;
+}
+
+.search-result-list button,
+.mobile-search-results button {
+  min-height: 36px;
+  border: 1px solid #29414f;
+  border-radius: 8px;
+  background: #0b161f;
+  color: #f8fbff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 11px;
+}
+
+.search-result-list button:first-of-type {
+  color: #dfff00;
 }
 
 input,
@@ -206,11 +305,23 @@ select {
 }
 
 select option {
-  color: #071018;
+  background: #071018;
+  color: #f8fbff;
+}
+
+select:focus,
+input:focus {
+  border-color: rgba(223, 255, 0, 0.75);
+  box-shadow: 0 0 0 3px rgba(223, 255, 0, 0.08);
 }
 
 input::placeholder {
   color: #85929b;
+}
+
+input[type="date"]::-webkit-calendar-picker-indicator {
+  filter: invert(1);
+  opacity: 0.78;
 }
 
 kbd {
@@ -823,6 +934,11 @@ th {
   grid-column: 1 / -1;
 }
 
+.editor-form .full-field,
+.member-picker {
+  grid-column: 1 / -1;
+}
+
 .editor-form label {
   display: grid;
   gap: 7px;
@@ -837,6 +953,42 @@ th {
   border: 1px solid #29414f;
   border-radius: 8px;
   background: #0b161f;
+  color: #f8fbff;
+}
+
+.editor-form input[readonly] {
+  color: #dfff00;
+  background: #101c25;
+}
+
+.member-picker {
+  max-height: 160px;
+  overflow: auto;
+  display: grid;
+  gap: 8px;
+}
+
+.member-picker button {
+  min-height: 46px;
+  padding: 8px 11px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid #29414f;
+  border-radius: 8px;
+  background: #0b161f;
+  color: #f8fbff;
+  text-align: left;
+}
+
+.member-picker button.selected {
+  border-color: #dfff00;
+  background: rgba(223, 255, 0, 0.12);
+}
+
+.member-picker small {
+  color: #9faab2;
 }
 
 @media (max-width: 1180px) {
