@@ -17,6 +17,16 @@ The backend can be deployed to a Java-friendly host such as Render, Railway, Fly
 
 The backend accepts Neon URLs in either `postgresql` URL form or JDBC form through `DATABASE_URL`.
 
+For Docker-based backend deployment, use:
+
+```text
+Root Directory: backend
+Dockerfile Path: Dockerfile
+Compute Plan: Free
+```
+
+Do not put backend database variables into the Vercel frontend project. Put them only in the Java backend service environment.
+
 ## Frontend on Vercel
 
 Vercel should host the React frontend only. The frontend should call the deployed backend API URL.
