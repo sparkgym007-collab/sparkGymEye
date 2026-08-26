@@ -67,7 +67,7 @@ Then run the backend with:
 
 ```text
 SPRING_PROFILES_ACTIVE=neon
-DATABASE_URL=<neon-jdbc-url>
+DATABASE_URL=<neon-postgres-or-jdbc-url>
 DATABASE_USERNAME=<database-role>
 DATABASE_PASSWORD=<your Neon password>
 ```

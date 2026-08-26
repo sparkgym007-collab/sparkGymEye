@@ -8,12 +8,14 @@ Required backend environment variables:
 
 ```text
 SPRING_PROFILES_ACTIVE=neon
-DATABASE_URL=<neon-jdbc-url>
+DATABASE_URL=<neon-postgres-or-jdbc-url>
 DATABASE_USERNAME=<database-role>
 DATABASE_PASSWORD=<database-password>
 ```
 
 The backend can be deployed to a Java-friendly host such as Render, Railway, Fly.io, an AWS service, or a VPS. As long as those environment variables are configured on the backend host, the backend will keep using Neon regardless of where the frontend is hosted.
+
+The backend accepts Neon URLs in either `postgresql` URL form or JDBC form through `DATABASE_URL`.
 
 ## Frontend on Vercel
 

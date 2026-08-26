@@ -6,7 +6,7 @@ import org.flywaydb.core.api.output.MigrateResult;
 public class DatabaseMigrator {
 
     public static void main(String[] args) {
-        String url = requiredEnv("DATABASE_URL");
+        String url = DatabaseUrlNormalizer.toJdbcUrl(requiredEnv("DATABASE_URL"));
         String username = requiredEnv("DATABASE_USERNAME");
         String password = requiredEnv("DATABASE_PASSWORD");
 
