@@ -29,8 +29,6 @@ public class AppUser {
 
     private boolean active = true;
     private String passwordHash;
-    private String resetTokenHash;
-    private Instant resetTokenExpiresAt;
     private Instant lastLoginAt;
 
     public Long getId() {
@@ -83,22 +81,6 @@ public class AppUser {
 
     public void setPasswordHash(String passwordHash) {
         this.passwordHash = passwordHash;
-    }
-
-    public String getResetTokenHash() {
-        return resetTokenHash;
-    }
-
-    public void setResetTokenHash(String resetTokenHash) {
-        this.resetTokenHash = resetTokenHash;
-    }
-
-    public Instant getResetTokenExpiresAt() {
-        return resetTokenExpiresAt;
-    }
-
-    public void setResetTokenExpiresAt(Instant resetTokenExpiresAt) {
-        this.resetTokenExpiresAt = resetTokenExpiresAt;
     }
 
     public Instant getLastLoginAt() {

@@ -1498,16 +1498,9 @@ function LoginScreen({
   const [fullName, setFullName] = useState("");
   const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
-  const [newPassword, setNewPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
-  const [resetToken, setResetToken] = useState("");
   const [showPassword, setShowPassword] = useState(false);
-  const [showNewPassword, setShowNewPassword] = useState(false);
   const [error, setError] = useState("");
-  const [forgotMode, setForgotMode] = useState(false);
   const [signupMode, setSignupMode] = useState(false);
-  const [resetMessage, setResetMessage] = useState("");
-  const canResetPassword = resetToken.trim().length > 0;
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -1523,123 +1516,38 @@ function LoginScreen({
     }
   }
 
-  async function forgotPassword(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setError("");
-    setResetMessage("");
-    setResetToken("");
-    await apiRequest<{ message: string; devResetToken?: string }>("/api/auth/forgot-password", {
-      method: "POST",
-      body: JSON.stringify({ phone: phone.trim() }),
-    })
-      .then((response) => {
-        setResetMessage(response.message);
-        setResetToken(response.devResetToken ?? "");
-      })
-      .catch(() => setResetMessage("If this phone exists, reset instructions will be sent."));
-  }
-
-  async function resetPassword(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setError("");
-    if (newPassword.length < 6) {
-      setError("Password must be at least 6 characters.");
-      return;
-    }
-    if (newPassword !== confirmPassword) {
-      setError("Passwords do not match.");
-      return;
-    }
-    try {
-      await apiRequest<void>("/api/auth/reset-password", {
-        method: "POST",
-        body: JSON.stringify({ token: resetToken.trim(), newPassword }),
-      });
-      setPassword("");
-      setNewPassword("");
-      setConfirmPassword("");
-      setResetToken("");
-      setForgotMode(false);
-      setResetMessage("Password changed. Login with your new password.");
-    } catch (error) {
-      setError(error instanceof Error ? error.message : "Reset token is invalid or expired.");
-    }
-  }
-
-  function backToLogin() {
-    setForgotMode(false);
-    setSignupMode(false);
-    setError("");
-    setResetMessage("");
-    setResetToken("");
-    setNewPassword("");
-    setConfirmPassword("");
-  }
-
   return (
     <main className="login-shell">
       <section className="login-card">
         <div className="brand">
           <h1>SP<span>A</span>RK</h1>
-          <p>Fees Control Login</p>
+          <p>Admin Login</p>
         </div>
-        {!forgotMode ? (
-          <form onSubmit={submit} className="login-form">
-            <h2>{signupMode ? "Sign Up" : "Login"}</h2>
-            {signupMode && <label>Name<input required value={fullName} onChange={(event) => setFullName(event.target.value)} placeholder="Your full name" /></label>}
-            <label>Phone Number<input value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="9876543211" /></label>
-            <PasswordField
-              label="Password"
-              value={password}
-              onChange={setPassword}
-              visible={showPassword}
-              onToggle={() => setShowPassword((value) => !value)}
-            />
-            {resetMessage && <p className="form-success">{resetMessage}</p>}
-            {error && <p className="form-error">{error}</p>}
-            <button className="primary" type="submit">{signupMode ? "Create Account" : "Login"}</button>
-            <button type="button" className="text-button" onClick={() => {
-              setSignupMode(!signupMode);
-              setError("");
-            }}>
-              {signupMode ? "Back to login" : "Create member account"}
-            </button>
-            <button type="button" className="text-button" onClick={() => setForgotMode(true)}>Forgot password?</button>
-            <div className="demo-users">
-              <span>Access rules</span>
-              <small>Admin and trainer accounts can manage gym records.</small>
-              <small>New signups are member accounts with view-only access.</small>
-            </div>
-          </form>
-        ) : (
-          <form onSubmit={canResetPassword ? resetPassword : forgotPassword} className="login-form">
-            <h2>Forgot Password</h2>
-            <label>Phone Number<input value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="Registered phone number" /></label>
-            {resetMessage && <p className="form-success">{resetMessage}</p>}
-            {canResetPassword && (
-              <div className="reset-panel">
-                <label>Reset Token<input value={resetToken} onChange={(event) => setResetToken(event.target.value)} /></label>
-                <PasswordField
-                  label="New Password"
-                  value={newPassword}
-                  onChange={setNewPassword}
-                  visible={showNewPassword}
-                  onToggle={() => setShowNewPassword((value) => !value)}
-                />
-                <PasswordField
-                  label="Confirm Password"
-                  value={confirmPassword}
-                  onChange={setConfirmPassword}
-                  visible={showNewPassword}
-                  onToggle={() => setShowNewPassword((value) => !value)}
-                />
-              </div>
-            )}
-            {error && <p className="form-error">{error}</p>}
-            <button className="primary" type="submit">{canResetPassword ? "Reset Password" : "Send Reset Instructions"}</button>
-            <button type="button" className="text-button" onClick={backToLogin}>Back to login</button>
-          </form>
-        )}
+        <form onSubmit={submit} className="login-form">
+          <h2>{signupMode ? "Create Member Account" : "Admin Access"}</h2>
+          {signupMode && <label>Name<input required value={fullName} onChange={(event) => setFullName(event.target.value)} placeholder="Your full name" /></label>}
+          <label>Phone Number<input value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="+91 98765 43210" /></label>
+          <PasswordField
+            label={signupMode ? "Create Password" : "Admin PIN / Password"}
+            value={password}
+            onChange={setPassword}
+            visible={showPassword}
+            onToggle={() => setShowPassword((value) => !value)}
+          />
+          {error && <p className="form-error">{error}</p>}
+          <button className="primary" type="submit">{signupMode ? "Create Member Account" : "Login"}</button>
+          <button type="button" className="text-button" onClick={() => {
+            setSignupMode(!signupMode);
+            setError("");
+          }}>
+            {signupMode ? "Back to admin login" : "Create member account"}
+          </button>
+          <div className="demo-users">
+            <span>Access rules</span>
+            <small>Admin and trainer accounts use phone plus secure PIN/password.</small>
+            <small>New signups are member accounts with view-only access.</small>
+          </div>
+        </form>
       </section>
     </main>
   );

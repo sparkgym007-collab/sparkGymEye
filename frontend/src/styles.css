@@ -239,15 +239,6 @@ p {
   background: rgba(223, 255, 0, 0.08);
 }
 
-.reset-panel {
-  display: grid;
-  gap: 13px;
-  padding: 12px;
-  border: 1px solid rgba(41, 65, 79, 0.74);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.035);
-}
-
 .text-button {
   border: 0;
   background: transparent;
@@ -266,10 +257,6 @@ p {
   background: rgba(255, 69, 99, 0.1);
   color: #ff8da0;
   font-size: var(--text-sm);
-}
-
-.form-success {
-  color: #b9ff71;
 }
 
 .demo-users {

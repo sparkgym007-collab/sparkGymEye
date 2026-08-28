@@ -22,6 +22,13 @@ server:
   port: ${PORT:9898}
 
 spark:
+  security:
+    seed:
+      enabled: ${SECURITY_SEED_ENABLED:true}
+      admin-phone: ${SPARK_ADMIN_PHONE:+919091423566}
+      admin-password: ${SPARK_ADMIN_PASSWORD:Spark@123}
+      trainer-phone: ${SPARK_TRAINER_PHONE:+919876543211}
+      trainer-password: ${SPARK_TRAINER_PASSWORD:Spark@123}
   reports:
     overdue-cron: ${OVERDUE_REPORT_CRON:0 0 10 ? * THU}
     recipient-email: ${REPORT_RECIPIENT_EMAIL:owner@sparkgym.in}
