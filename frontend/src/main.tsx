@@ -7,6 +7,8 @@ import {
   CreditCard,
   Download,
   Edit3,
+  Eye,
+  EyeOff,
   FileSpreadsheet,
   Home,
   IndianRupee,
@@ -25,10 +27,11 @@ import {
   X,
   Zap,
 } from "lucide-react";
-import { initialMembers, initialPayments, plans } from "./data/mockData";
+import { plans } from "./data/plans";
 import "./styles.css";
 
 type MemberStatus = "Active" | "Due soon" | "Overdue";
+type ApiMemberStatus = "ACTIVE" | "DUE_SOON" | "OVERDUE" | "PAUSED";
 
 type Member = {
   id: number;
@@ -57,6 +60,7 @@ type Payment = {
 type AuthRole = "ADMIN" | "TRAINER" | "MEMBER";
 
 type AuthUser = {
+  id: number;
   name: string;
   phone: string;
   role: AuthRole;
@@ -68,13 +72,38 @@ type MemberForm = Omit<Member, "id" | "rollNo" | "daysOverdue" | "status"> & {
   paymentDate: string;
 };
 
-const today = new Date("2026-08-26T00:00:00");
+type ApiMember = {
+  id: number;
+  rollNo: string;
+  name: string;
+  phone: string;
+  role: AuthRole;
+  planName: string;
+  planStartDate: string;
+  dueDate: string;
+  monthlyFee: number;
+  amountDue: number;
+  status: ApiMemberStatus;
+};
 
-const demoUsers: (AuthUser & { password: string })[] = [
-  { name: "SPARK Admin", phone: "9876543210", role: "ADMIN", password: "Spark@123" },
-  { name: "Trainer", phone: "9876543211", role: "TRAINER", password: "Spark@123" },
-  { name: "Viewer Member", phone: "9876543212", role: "MEMBER", password: "Spark@123" },
-];
+type ApiPayment = {
+  id: number;
+  rollNo: string;
+  amount: number;
+  durationMonths: number;
+  paidAt: string;
+  receivedBy: string;
+};
+
+type ApiAuthUser = {
+  id: number;
+  fullName: string;
+  phone: string;
+  role: AuthRole;
+};
+
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:9898";
+const today = new Date();
 
 const emptyForm: MemberForm = {
   name: "",
@@ -124,6 +153,96 @@ function getStatus(dueDate: string, amountDue: number): Pick<Member, "status" | 
   return { status: "Active", daysOverdue: 0 };
 }
 
+function toUiStatus(status: ApiMemberStatus): MemberStatus {
+  if (status === "OVERDUE") return "Overdue";
+  if (status === "DUE_SOON") return "Due soon";
+  return "Active";
+}
+
+function mapAuthUser(user: ApiAuthUser): AuthUser {
+  return {
+    id: user.id,
+    name: user.fullName,
+    phone: user.phone,
+    role: user.role,
+  };
+}
+
+function mapApiMember(member: ApiMember): Member {
+  const status = getStatus(member.dueDate, Number(member.amountDue));
+  return {
+    id: member.id,
+    rollNo: member.rollNo,
+    name: member.name,
+    phone: member.phone,
+    plan: member.planName,
+    dueDate: member.dueDate,
+    amountDue: Number(member.amountDue),
+    paidUpTo: member.dueDate,
+    daysOverdue: status.daysOverdue,
+    status: status.daysOverdue > 0 ? status.status : toUiStatus(member.status),
+  };
+}
+
+function mapApiPayment(payment: ApiPayment, members: Member[]): Payment {
+  const member = members.find((item) => item.rollNo === payment.rollNo);
+  const plan = plans.find((item) => item.months === payment.durationMonths);
+  return {
+    id: payment.id,
+    memberName: member?.name ?? payment.rollNo,
+    rollNo: payment.rollNo,
+    plan: plan?.name ?? `${payment.durationMonths} Month`,
+    amount: Number(payment.amount),
+    paymentDate: payment.paidAt,
+    mode: "UPI",
+    receipt: `#RCPT-${payment.id}`,
+  };
+}
+
+function toApiMember(member: MemberForm, id?: number, rollNo?: string): ApiMember {
+  const plan = plans.find((item) => item.name === member.plan) ?? plans[0];
+  return {
+    id: id ?? 0,
+    rollNo: rollNo ?? "",
+    name: member.name,
+    phone: member.phone,
+    role: "MEMBER",
+    planName: member.plan,
+    planStartDate: member.paymentDate,
+    dueDate: member.dueDate,
+    monthlyFee: plan.amount,
+    amountDue: Number(member.amountDue),
+    status: "ACTIVE",
+  };
+}
+
+async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const response = await fetch(`${API_BASE}${path}`, {
+    credentials: "include",
+    ...init,
+    headers: {
+      "Content-Type": "application/json",
+      ...init.headers,
+    },
+  });
+  if (!response.ok) {
+    const message = await response.text();
+    let errorMessage = message;
+    try {
+      const payload = JSON.parse(message) as { message?: string };
+      errorMessage = payload.message || errorMessage;
+    } catch {
+      // Keep the raw response text when the server did not return JSON.
+    }
+    throw new Error(errorMessage || `Request failed with status ${response.status}`);
+  }
+  if (response.status === 204) {
+    return undefined as T;
+  }
+  const text = await response.text();
+  return text ? JSON.parse(text) as T : undefined as T;
+}
+
 function nextRollNo(members: Member[]) {
   const highest = members.reduce((max, member) => {
     const value = Number(member.rollNo.replace(/\D/g, ""));
@@ -132,52 +251,21 @@ function nextRollNo(members: Member[]) {
   return `SP-${String(highest + 1).padStart(3, "0")}`;
 }
 
-function normalizeMember(member: MemberForm, id: number, rollNo: string): Member {
-  const { paymentDate: _paymentDate, ...memberFields } = member;
-  return {
-    id,
-    rollNo,
-    ...memberFields,
-    amountDue: Number(memberFields.amountDue),
-    ...getStatus(memberFields.dueDate, Number(memberFields.amountDue)),
-  };
-}
-
 function plusMonths(date: string, months: number) {
   const next = new Date(`${date}T00:00:00`);
   next.setMonth(next.getMonth() + months);
   return next.toISOString().slice(0, 10);
 }
 
-function writeCookie(name: string, value: string, days = 7) {
-  const maxAge = days * 24 * 60 * 60;
-  document.cookie = `${name}=${encodeURIComponent(value)}; max-age=${maxAge}; path=/; SameSite=Lax`;
-}
-
-function readCookie(name: string) {
-  return document.cookie
-    .split("; ")
-    .find((part) => part.startsWith(`${name}=`))
-    ?.split("=")[1];
-}
-
-function clearCookie(name: string) {
-  document.cookie = `${name}=; max-age=0; path=/; SameSite=Lax`;
-}
-
 function App() {
-  const [authUser, setAuthUser] = useState<AuthUser | null>(() => {
-    const cookie = readCookie("spark_user");
-    return cookie ? JSON.parse(decodeURIComponent(cookie)) as AuthUser : null;
-  });
-  const [members, setMembers] = useState<Member[]>(() =>
-    initialMembers.map((member, index) => normalizeMember({ ...member, paymentDate: member.paidUpTo }, index + 1, member.rollNo))
-  );
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [members, setMembers] = useState<Member[]>([]);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [mobileView, setMobileView] = useState<MobileView>("dashboard");
-  const [payments, setPayments] = useState<Payment[]>(initialPayments);
+  const [payments, setPayments] = useState<Payment[]>([]);
   const [query, setQuery] = useState("");
-  const [dialog, setDialog] = useState<"add" | "edit" | "payment" | null>(null);
+  const [dialog, setDialog] = useState<"add" | "edit" | "payment" | "profile" | null>(null);
   const [selectedMember, setSelectedMember] = useState<Member | null>(null);
   const [form, setForm] = useState<MemberForm>(emptyForm);
   const [paymentAmount, setPaymentAmount] = useState(600);
@@ -185,6 +273,7 @@ function App() {
   const [paymentDate, setPaymentDate] = useState(today.toISOString().slice(0, 10));
   const [paymentPlan, setPaymentPlan] = useState("1 Month");
   const [paymentSearch, setPaymentSearch] = useState("");
+  const [appError, setAppError] = useState("");
   const canManage = authUser?.role === "ADMIN" || authUser?.role === "TRAINER";
 
   const filteredMembers = useMemo(() => {
@@ -199,6 +288,32 @@ function App() {
   const totalReceivable = members.reduce((sum, member) => sum + member.amountDue, 0);
   const monthlyCollection = payments.reduce((sum, payment) => sum + payment.amount, 0);
   const overdueAmount = overdueMembers.reduce((sum, member) => sum + member.amountDue, 0);
+
+  async function loadMembers() {
+    const apiMembers = await apiRequest<ApiMember[]>("/api/members");
+    const nextMembers = apiMembers.map(mapApiMember);
+    setMembers(nextMembers);
+    return nextMembers;
+  }
+
+  async function loadAppData() {
+    const nextMembers = await loadMembers();
+    const apiPayments = await apiRequest<ApiPayment[]>("/api/payments");
+    setPayments(apiPayments.map((payment) => mapApiPayment(payment, nextMembers)));
+  }
+
+  useEffect(() => {
+    apiRequest<ApiAuthUser>("/api/auth/me")
+      .then((user) => {
+        setAuthUser(mapAuthUser(user));
+        return loadAppData();
+      })
+      .catch(() => {
+        setAuthUser(null);
+        setMembers([]);
+      })
+      .finally(() => setAuthLoading(false));
+  }, []);
 
   useEffect(() => {
     if (!mobileMenuOpen) return;
@@ -253,74 +368,107 @@ function App() {
     setDialog("payment");
   }
 
-  function saveMember(event: FormEvent<HTMLFormElement>) {
+  function openProfile() {
+    setDialog("profile");
+  }
+
+  async function saveMember(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (dialog === "edit" && selectedMember) {
-      setMembers((current) =>
-        current.map((member) => (member.id === selectedMember.id ? normalizeMember(form, selectedMember.id, member.rollNo) : member))
-      );
-    } else {
-      const nextId = Math.max(0, ...members.map((member) => member.id)) + 1;
-      setMembers((current) => [normalizeMember(form, nextId, nextRollNo(current)), ...current]);
-    }
-    setDialog(null);
-  }
-
-  function deleteMember(memberId: number) {
     if (!canManage) return;
-    setMembers((current) => current.filter((member) => member.id !== memberId));
+    setAppError("");
+    try {
+      if (dialog === "edit" && selectedMember) {
+        await apiRequest<ApiMember>(`/api/members/${selectedMember.id}`, {
+          method: "PUT",
+          body: JSON.stringify(toApiMember(form, selectedMember.id, selectedMember.rollNo)),
+        });
+      } else {
+        await apiRequest<ApiMember>("/api/members", {
+          method: "POST",
+          body: JSON.stringify(toApiMember(form, undefined, nextRollNo(members))),
+        });
+      }
+      await loadAppData();
+      setDialog(null);
+    } catch (error) {
+      setAppError(error instanceof Error ? error.message : "Could not save member");
+    }
   }
 
-  function recordPayment(event: FormEvent<HTMLFormElement>) {
+  async function deleteMember(memberId: number) {
+    if (!canManage) return;
+    setAppError("");
+    try {
+      await apiRequest<void>(`/api/members/${memberId}`, { method: "DELETE" });
+      await loadAppData();
+    } catch (error) {
+      setAppError(error instanceof Error ? error.message : "Could not delete member");
+    }
+  }
+
+  async function recordPayment(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!canManage) return;
     if (!selectedMember) return;
     const plan = plans.find((item) => item.name === paymentPlan) ?? plans[0];
-    const paidAt = paymentDate;
-    const paidUpTo = plusMonths(paidAt, plan.months);
-    setMembers((current) =>
-      current.map((member) =>
-        member.id === selectedMember.id
-          ? normalizeMember({ ...member, plan: paymentPlan, amountDue: Math.max(0, member.amountDue - paymentAmount), paymentDate: paidAt, paidUpTo, dueDate: paidUpTo }, member.id, member.rollNo)
-          : member
-      )
-    );
-    setPayments((current) => [
-      {
-        id: Date.now(),
-        memberName: selectedMember.name,
-        rollNo: selectedMember.rollNo,
-        plan: paymentPlan,
-        amount: paymentAmount,
-        paymentDate: paidAt,
-        mode: paymentMode,
-        receipt: `#RCPT-${2400 + current.length + 1}`,
-      },
-      ...current,
-    ]);
-    setDialog(null);
-  }
-
-  function login(phone: string, password: string) {
-    const user = demoUsers.find((candidate) => candidate.phone === phone && candidate.password === password);
-    if (!user) {
-      return false;
+    setAppError("");
+    try {
+      await apiRequest<ApiPayment>("/api/payments", {
+        method: "POST",
+        body: JSON.stringify({
+          rollNo: selectedMember.rollNo,
+          amount: paymentAmount,
+          durationMonths: plan.months,
+          paidAt: paymentDate,
+          receivedBy: authUser?.role ?? "ADMIN",
+        }),
+      });
+      await loadAppData();
+      setDialog(null);
+    } catch (error) {
+      setAppError(error instanceof Error ? error.message : "Could not record payment");
     }
-    const nextUser = { name: user.name, phone: user.phone, role: user.role };
-    writeCookie("spark_session", crypto.randomUUID());
-    writeCookie("spark_user", JSON.stringify(nextUser));
-    setAuthUser(nextUser);
-    return true;
   }
 
-  function logout() {
-    clearCookie("spark_session");
-    clearCookie("spark_user");
+  async function login(phone: string, password: string) {
+    const user = await apiRequest<ApiAuthUser>("/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ phone, password }),
+    });
+    setAuthUser(mapAuthUser(user));
+    await loadAppData();
+  }
+
+  async function signup(fullName: string, phone: string, password: string) {
+    const user = await apiRequest<ApiAuthUser>("/api/auth/signup", {
+      method: "POST",
+      body: JSON.stringify({ fullName, phone, password }),
+    });
+    setAuthUser(mapAuthUser(user));
+    await loadAppData();
+  }
+
+  async function updateProfile(fullName: string, phone: string) {
+    const user = await apiRequest<ApiAuthUser>("/api/auth/me", {
+      method: "PUT",
+      body: JSON.stringify({ fullName, phone }),
+    });
+    setAuthUser(mapAuthUser(user));
+  }
+
+  async function logout() {
+    await apiRequest<void>("/api/auth/logout", { method: "POST" }).catch(() => undefined);
     setAuthUser(null);
+    setMembers([]);
+    setPayments([]);
+  }
+
+  if (authLoading) {
+    return <main className="login-shell"><section className="login-card"><div className="brand"><h1>SP<span>A</span>RK</h1><p>Loading</p></div></section></main>;
   }
 
   if (!authUser) {
-    return <LoginScreen onLogin={login} />;
+    return <LoginScreen onLogin={login} onSignup={signup} />;
   }
 
   function exportCsv() {
@@ -351,6 +499,7 @@ function App() {
         <Sidebar onLogout={logout} />
         <section className="desktop-dashboard">
           <Topbar query={query} setQuery={setQuery} />
+          {appError && <p className="app-error">{appError}</p>}
           {query.trim() && (
             <SearchResults
               members={filteredMembers}
@@ -423,6 +572,8 @@ function App() {
           menuOpen={mobileMenuOpen}
           setMenuOpen={setMobileMenuOpen}
           onLogout={logout}
+          onProfile={openProfile}
+          appError={appError}
         />
       </main>
 
@@ -454,6 +605,8 @@ function App() {
                 setSelectedMember={setSelectedMember}
                 onSubmit={recordPayment}
               />
+            ) : dialog === "profile" ? (
+              <ProfileForm authUser={authUser} onSubmit={updateProfile} onDone={() => setDialog(null)} />
             ) : (
               <MemberEditor mode={dialog} form={form} setForm={setForm} onSubmit={saveMember} />
             )}
@@ -761,6 +914,8 @@ function MobileDashboard({
   menuOpen,
   setMenuOpen,
   onLogout,
+  onProfile,
+  appError,
 }: {
   query: string;
   setQuery: (value: string) => void;
@@ -781,6 +936,8 @@ function MobileDashboard({
   menuOpen: boolean;
   setMenuOpen: (open: boolean) => void;
   onLogout: () => void;
+  onProfile: () => void;
+  appError: string;
 }) {
   function navigate(nextView: MobileView) {
     setView(nextView);
@@ -829,12 +986,13 @@ function MobileDashboard({
           )}
         </section>
       )}
+      {appError && <p className="app-error">{appError}</p>}
 
-      <section className="mobile-trainer" id="mobile-profile">
+      <button className="mobile-trainer" id="mobile-profile" onClick={onProfile}>
         <img alt="Trainer profile" src="https://images.unsplash.com/photo-1568602471122-7832951cc4c5?auto=format&fit=crop&w=90&q=80" />
         <div><strong>{authUser.name}</strong><span>{authUser.phone} · {authUser.role}</span></div>
         <ChevronRight size={18} />
-      </section>
+      </button>
 
       {view === "dashboard" && (
         <>
@@ -1294,29 +1452,128 @@ function PaymentForm({
   );
 }
 
-function LoginScreen({ onLogin }: { onLogin: (phone: string, password: string) => boolean }) {
-  const [phone, setPhone] = useState("9876543211");
-  const [password, setPassword] = useState("Spark@123");
+function ProfileForm({
+  authUser,
+  onSubmit,
+  onDone,
+}: {
+  authUser: AuthUser;
+  onSubmit: (fullName: string, phone: string) => Promise<void>;
+  onDone: () => void;
+}) {
+  const [fullName, setFullName] = useState(authUser.name);
+  const [phone, setPhone] = useState(authUser.phone);
   const [error, setError] = useState("");
-  const [forgotMode, setForgotMode] = useState(false);
-  const [resetMessage, setResetMessage] = useState("");
 
-  function submit(event: FormEvent<HTMLFormElement>) {
+  async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError("");
-    if (!onLogin(phone.trim(), password)) {
-      setError("Invalid phone number or password.");
+    try {
+      await onSubmit(fullName.trim(), phone.trim());
+      onDone();
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Could not update profile");
     }
   }
 
-  function forgotPassword(event: FormEvent<HTMLFormElement>) {
+  return (
+    <form className="editor-form" onSubmit={submit}>
+      <h3>My Profile</h3>
+      <p>{authUser.role}</p>
+      <label>Name<input required value={fullName} onChange={(event) => setFullName(event.target.value)} /></label>
+      <label>Phone<input required value={phone} onChange={(event) => setPhone(event.target.value)} /></label>
+      {error && <p className="form-error">{error}</p>}
+      <button className="primary" type="submit">Save Profile</button>
+    </form>
+  );
+}
+
+function LoginScreen({
+  onLogin,
+  onSignup,
+}: {
+  onLogin: (phone: string, password: string) => Promise<void>;
+  onSignup: (fullName: string, phone: string, password: string) => Promise<void>;
+}) {
+  const [fullName, setFullName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [password, setPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [resetToken, setResetToken] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [error, setError] = useState("");
+  const [forgotMode, setForgotMode] = useState(false);
+  const [signupMode, setSignupMode] = useState(false);
+  const [resetMessage, setResetMessage] = useState("");
+  const canResetPassword = resetToken.trim().length > 0;
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const knownUser = demoUsers.find((user) => user.phone === phone.trim());
-    setResetMessage(
-      knownUser
-        ? "Reset link prepared. Backend will send this by SMS/email after provider setup."
-        : "If this phone exists, reset instructions will be sent."
-    );
+    setError("");
+    try {
+      if (signupMode) {
+        await onSignup(fullName.trim(), phone.trim(), password);
+      } else {
+        await onLogin(phone.trim(), password);
+      }
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Invalid phone number or password.");
+    }
+  }
+
+  async function forgotPassword(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError("");
+    setResetMessage("");
+    setResetToken("");
+    await apiRequest<{ message: string; devResetToken?: string }>("/api/auth/forgot-password", {
+      method: "POST",
+      body: JSON.stringify({ phone: phone.trim() }),
+    })
+      .then((response) => {
+        setResetMessage(response.message);
+        setResetToken(response.devResetToken ?? "");
+      })
+      .catch(() => setResetMessage("If this phone exists, reset instructions will be sent."));
+  }
+
+  async function resetPassword(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError("");
+    if (newPassword.length < 6) {
+      setError("Password must be at least 6 characters.");
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setError("Passwords do not match.");
+      return;
+    }
+    try {
+      await apiRequest<void>("/api/auth/reset-password", {
+        method: "POST",
+        body: JSON.stringify({ token: resetToken.trim(), newPassword }),
+      });
+      setPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+      setResetToken("");
+      setForgotMode(false);
+      setResetMessage("Password changed. Login with your new password.");
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Reset token is invalid or expired.");
+    }
+  }
+
+  function backToLogin() {
+    setForgotMode(false);
+    setSignupMode(false);
+    setError("");
+    setResetMessage("");
+    setResetToken("");
+    setNewPassword("");
+    setConfirmPassword("");
   }
 
   return (
@@ -1328,30 +1585,93 @@ function LoginScreen({ onLogin }: { onLogin: (phone: string, password: string) =
         </div>
         {!forgotMode ? (
           <form onSubmit={submit} className="login-form">
-            <h2>Login</h2>
+            <h2>{signupMode ? "Sign Up" : "Login"}</h2>
+            {signupMode && <label>Name<input required value={fullName} onChange={(event) => setFullName(event.target.value)} placeholder="Your full name" /></label>}
             <label>Phone Number<input value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="9876543211" /></label>
-            <label>Password<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Password" /></label>
+            <PasswordField
+              label="Password"
+              value={password}
+              onChange={setPassword}
+              visible={showPassword}
+              onToggle={() => setShowPassword((value) => !value)}
+            />
+            {resetMessage && <p className="form-success">{resetMessage}</p>}
             {error && <p className="form-error">{error}</p>}
-            <button className="primary" type="submit">Login</button>
+            <button className="primary" type="submit">{signupMode ? "Create Account" : "Login"}</button>
+            <button type="button" className="text-button" onClick={() => {
+              setSignupMode(!signupMode);
+              setError("");
+            }}>
+              {signupMode ? "Back to login" : "Create member account"}
+            </button>
             <button type="button" className="text-button" onClick={() => setForgotMode(true)}>Forgot password?</button>
             <div className="demo-users">
-              <span>Demo access</span>
-              <small>Admin: 9876543210 / Spark@123</small>
-              <small>Trainer: 9876543211 / Spark@123</small>
-              <small>View only: 9876543212 / Spark@123</small>
+              <span>Access rules</span>
+              <small>Admin and trainer accounts can manage gym records.</small>
+              <small>New signups are member accounts with view-only access.</small>
             </div>
           </form>
         ) : (
-          <form onSubmit={forgotPassword} className="login-form">
+          <form onSubmit={canResetPassword ? resetPassword : forgotPassword} className="login-form">
             <h2>Forgot Password</h2>
             <label>Phone Number<input value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="Registered phone number" /></label>
             {resetMessage && <p className="form-success">{resetMessage}</p>}
-            <button className="primary" type="submit">Send Reset Instructions</button>
-            <button type="button" className="text-button" onClick={() => setForgotMode(false)}>Back to login</button>
+            {canResetPassword && (
+              <div className="reset-panel">
+                <label>Reset Token<input value={resetToken} onChange={(event) => setResetToken(event.target.value)} /></label>
+                <PasswordField
+                  label="New Password"
+                  value={newPassword}
+                  onChange={setNewPassword}
+                  visible={showNewPassword}
+                  onToggle={() => setShowNewPassword((value) => !value)}
+                />
+                <PasswordField
+                  label="Confirm Password"
+                  value={confirmPassword}
+                  onChange={setConfirmPassword}
+                  visible={showNewPassword}
+                  onToggle={() => setShowNewPassword((value) => !value)}
+                />
+              </div>
+            )}
+            {error && <p className="form-error">{error}</p>}
+            <button className="primary" type="submit">{canResetPassword ? "Reset Password" : "Send Reset Instructions"}</button>
+            <button type="button" className="text-button" onClick={backToLogin}>Back to login</button>
           </form>
         )}
       </section>
     </main>
+  );
+}
+
+function PasswordField({
+  label,
+  value,
+  onChange,
+  visible,
+  onToggle,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  visible: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <label>{label}
+      <span className="password-field">
+        <input
+          type={visible ? "text" : "password"}
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          placeholder={label}
+        />
+        <button type="button" className="password-toggle" onClick={onToggle} aria-label={visible ? "Hide password" : "Show password"}>
+          {visible ? <EyeOff size={18} /> : <Eye size={18} />}
+        </button>
+      </span>
+    </label>
   );
 }
 

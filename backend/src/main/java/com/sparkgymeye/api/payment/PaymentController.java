@@ -21,6 +21,11 @@ public class PaymentController {
         this.paymentService = paymentService;
     }
 
+    @GetMapping
+    public List<Payment> all() {
+        return paymentRepository.findAllByOrderByPaidAtDesc();
+    }
+
     @GetMapping("/{rollNo}")
     public List<Payment> byMember(@PathVariable String rollNo) {
         return paymentRepository.findByRollNoOrderByPaidAtDesc(rollNo);

@@ -45,12 +45,48 @@ public class AuthService {
         return new LoginResult(user, token);
     }
 
+    @Transactional
+    public LoginResult signup(SignupRequest request) {
+        if (appUserRepository.existsByPhone(request.phone())) {
+            throw new IllegalArgumentException("Phone number already exists");
+        }
+        AppUser user = new AppUser();
+        user.setFullName(request.fullName());
+        user.setPhone(request.phone());
+        user.setRole(Role.MEMBER);
+        user.setActive(true);
+        user.setPasswordHash(passwordEncoder.encode(request.password()));
+        appUserRepository.save(user);
+
+        String token = randomToken();
+        AuthSession session = new AuthSession();
+        session.setAppUser(user);
+        session.setTokenHash(Hashing.sha256(token));
+        session.setExpiresAt(Instant.now().plus(14, ChronoUnit.DAYS));
+        authSessionRepository.save(session);
+
+        return new LoginResult(user, token);
+    }
+
     public AppUser requireUserByToken(String token) {
         return authSessionRepository.findByTokenHash(Hashing.sha256(token))
                 .filter(session -> session.getExpiresAt().isAfter(Instant.now()))
                 .map(AuthSession::getAppUser)
                 .filter(AppUser::isActive)
                 .orElseThrow(() -> new BadCredentialsException("Session expired"));
+    }
+
+    @Transactional
+    public AppUser updateProfile(String token, UpdateProfileRequest request) {
+        AppUser user = requireUserByToken(token);
+        appUserRepository.findByPhone(request.phone())
+                .filter(existing -> !existing.getId().equals(user.getId()))
+                .ifPresent(existing -> {
+                    throw new IllegalArgumentException("Phone number already exists");
+                });
+        user.setFullName(request.fullName());
+        user.setPhone(request.phone());
+        return appUserRepository.save(user);
     }
 
     @Transactional
@@ -67,7 +103,7 @@ public class AuthService {
                     user.setResetTokenExpiresAt(Instant.now().plus(30, ChronoUnit.MINUTES));
                     return token;
                 })
-                .orElse("If this phone exists, a reset token was created.");
+                .orElse(null);
     }
 
     @Transactional

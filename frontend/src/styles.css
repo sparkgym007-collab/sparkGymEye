@@ -80,7 +80,7 @@ p {
   background-size: cover;
   background-position: 55% bottom;
   background-repeat: no-repeat;
-  overflow: hidden;
+  overflow-y: auto;
 }
 
 .sidebar::before {
@@ -200,6 +200,54 @@ p {
   color: #f8fbff;
 }
 
+.password-field {
+  min-height: 46px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 44px;
+  align-items: center;
+  border: 1px solid #29414f;
+  border-radius: 8px;
+  background: #0b161f;
+  overflow: hidden;
+}
+
+.login-form .password-field input {
+  min-height: 44px;
+  width: 100%;
+  padding: 0 0 0 13px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.password-field:focus-within {
+  border-color: #dfff00;
+  box-shadow: 0 0 0 2px rgba(223, 255, 0, 0.16);
+}
+
+.password-toggle {
+  width: 44px;
+  height: 44px;
+  border: 0;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  color: #dfff00;
+}
+
+.password-toggle:hover {
+  background: rgba(223, 255, 0, 0.08);
+}
+
+.reset-panel {
+  display: grid;
+  gap: 13px;
+  padding: 12px;
+  border: 1px solid rgba(41, 65, 79, 0.74);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
 .text-button {
   border: 0;
   background: transparent;
@@ -209,6 +257,15 @@ p {
 
 .form-error {
   color: #ff6b83;
+}
+
+.app-error {
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 69, 99, 0.38);
+  border-radius: 8px;
+  background: rgba(255, 69, 99, 0.1);
+  color: #ff8da0;
+  font-size: var(--text-sm);
 }
 
 .form-success {
@@ -246,7 +303,7 @@ p {
 }
 
 .gym-card {
-  min-height: 360px;
+  min-height: 250px;
   margin-top: auto;
   padding: 26px 16px;
   display: grid;
@@ -283,7 +340,11 @@ p {
 }
 
 .logout {
+  min-height: 48px;
   margin-top: 2px;
+  border: 1px solid #29414f;
+  background: linear-gradient(180deg, rgba(18, 31, 40, 0.86), rgba(7, 14, 20, 0.94));
+  flex-shrink: 0;
 }
 
 .desktop-dashboard {
@@ -1096,10 +1157,13 @@ th {
 .mobile-trainer {
   min-height: 74px;
   padding: 13px;
+  width: 100%;
   display: grid;
   grid-template-columns: 42px 1fr 18px;
   align-items: center;
   gap: 11px;
+  color: inherit;
+  text-align: left;
 }
 
 .mobile-hero {
