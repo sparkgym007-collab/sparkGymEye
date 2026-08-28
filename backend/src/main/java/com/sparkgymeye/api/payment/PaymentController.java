@@ -14,9 +14,11 @@ import org.springframework.web.bind.annotation.RestController;
 public class PaymentController {
 
     private final PaymentRepository paymentRepository;
+    private final PaymentService paymentService;
 
-    public PaymentController(PaymentRepository paymentRepository) {
+    public PaymentController(PaymentRepository paymentRepository, PaymentService paymentService) {
         this.paymentRepository = paymentRepository;
+        this.paymentService = paymentService;
     }
 
     @GetMapping("/{rollNo}")
@@ -26,6 +28,6 @@ public class PaymentController {
 
     @PostMapping
     public Payment record(@Valid @RequestBody Payment payment) {
-        return paymentRepository.save(payment);
+        return paymentService.record(payment);
     }
 }

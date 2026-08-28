@@ -1,4 +1,4 @@
-import React, { FormEvent, useMemo, useState } from "react";
+import React, { FormEvent, useEffect, useMemo, useState } from "react";
 import ReactDOM from "react-dom/client";
 import {
   Bell,
@@ -54,11 +54,27 @@ type Payment = {
   receipt: string;
 };
 
+type AuthRole = "ADMIN" | "TRAINER" | "MEMBER";
+
+type AuthUser = {
+  name: string;
+  phone: string;
+  role: AuthRole;
+};
+
+type MobileView = "dashboard" | "members" | "fees" | "overdue";
+
 type MemberForm = Omit<Member, "id" | "rollNo" | "daysOverdue" | "status"> & {
   paymentDate: string;
 };
 
 const today = new Date("2026-08-26T00:00:00");
+
+const demoUsers: (AuthUser & { password: string })[] = [
+  { name: "SPARK Admin", phone: "9876543210", role: "ADMIN", password: "Spark@123" },
+  { name: "Trainer", phone: "9876543211", role: "TRAINER", password: "Spark@123" },
+  { name: "Viewer Member", phone: "9876543212", role: "MEMBER", password: "Spark@123" },
+];
 
 const emptyForm: MemberForm = {
   name: "",
@@ -133,10 +149,32 @@ function plusMonths(date: string, months: number) {
   return next.toISOString().slice(0, 10);
 }
 
+function writeCookie(name: string, value: string, days = 7) {
+  const maxAge = days * 24 * 60 * 60;
+  document.cookie = `${name}=${encodeURIComponent(value)}; max-age=${maxAge}; path=/; SameSite=Lax`;
+}
+
+function readCookie(name: string) {
+  return document.cookie
+    .split("; ")
+    .find((part) => part.startsWith(`${name}=`))
+    ?.split("=")[1];
+}
+
+function clearCookie(name: string) {
+  document.cookie = `${name}=; max-age=0; path=/; SameSite=Lax`;
+}
+
 function App() {
+  const [authUser, setAuthUser] = useState<AuthUser | null>(() => {
+    const cookie = readCookie("spark_user");
+    return cookie ? JSON.parse(decodeURIComponent(cookie)) as AuthUser : null;
+  });
   const [members, setMembers] = useState<Member[]>(() =>
     initialMembers.map((member, index) => normalizeMember({ ...member, paymentDate: member.paidUpTo }, index + 1, member.rollNo))
   );
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [mobileView, setMobileView] = useState<MobileView>("dashboard");
   const [payments, setPayments] = useState<Payment[]>(initialPayments);
   const [query, setQuery] = useState("");
   const [dialog, setDialog] = useState<"add" | "edit" | "payment" | null>(null);
@@ -147,6 +185,7 @@ function App() {
   const [paymentDate, setPaymentDate] = useState(today.toISOString().slice(0, 10));
   const [paymentPlan, setPaymentPlan] = useState("1 Month");
   const [paymentSearch, setPaymentSearch] = useState("");
+  const canManage = authUser?.role === "ADMIN" || authUser?.role === "TRAINER";
 
   const filteredMembers = useMemo(() => {
     const term = query.trim().toLowerCase();
@@ -161,6 +200,17 @@ function App() {
   const monthlyCollection = payments.reduce((sum, payment) => sum + payment.amount, 0);
   const overdueAmount = overdueMembers.reduce((sum, member) => sum + member.amountDue, 0);
 
+  useEffect(() => {
+    if (!mobileMenuOpen) return;
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setMobileMenuOpen(false);
+      }
+    }
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [mobileMenuOpen]);
+
   const overdueBuckets = [
     { label: "1 - 15 days", members: overdueMembers.filter((member) => member.daysOverdue <= 15), tone: "violet" },
     { label: "16 - 30 days", members: overdueMembers.filter((member) => member.daysOverdue > 15 && member.daysOverdue <= 30), tone: "red" },
@@ -169,12 +219,14 @@ function App() {
   ];
 
   function openAdd() {
+    if (!canManage) return;
     setSelectedMember(null);
     setForm(emptyForm);
     setDialog("add");
   }
 
   function openEdit(member: Member) {
+    if (!canManage) return;
     setSelectedMember(member);
     setForm({
       name: member.name,
@@ -189,6 +241,7 @@ function App() {
   }
 
   function openPayment(member?: Member) {
+    if (!canManage) return;
     const target = member ?? overdueMembers[0] ?? members[0];
     setSelectedMember(target);
     const plan = plans.find((item) => item.name === target?.plan) ?? plans[0];
@@ -214,11 +267,13 @@ function App() {
   }
 
   function deleteMember(memberId: number) {
+    if (!canManage) return;
     setMembers((current) => current.filter((member) => member.id !== memberId));
   }
 
   function recordPayment(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!canManage) return;
     if (!selectedMember) return;
     const plan = plans.find((item) => item.name === paymentPlan) ?? plans[0];
     const paidAt = paymentDate;
@@ -246,6 +301,28 @@ function App() {
     setDialog(null);
   }
 
+  function login(phone: string, password: string) {
+    const user = demoUsers.find((candidate) => candidate.phone === phone && candidate.password === password);
+    if (!user) {
+      return false;
+    }
+    const nextUser = { name: user.name, phone: user.phone, role: user.role };
+    writeCookie("spark_session", crypto.randomUUID());
+    writeCookie("spark_user", JSON.stringify(nextUser));
+    setAuthUser(nextUser);
+    return true;
+  }
+
+  function logout() {
+    clearCookie("spark_session");
+    clearCookie("spark_user");
+    setAuthUser(null);
+  }
+
+  if (!authUser) {
+    return <LoginScreen onLogin={login} />;
+  }
+
   function exportCsv() {
     const rows = [
       ["Name", "Phone", "Plan", "Payment Due", "Amount", "Paid Up To", "Days Overdue"],
@@ -271,7 +348,7 @@ function App() {
   return (
     <>
       <main className="desktop-shell">
-        <Sidebar />
+        <Sidebar onLogout={logout} />
         <section className="desktop-dashboard">
           <Topbar query={query} setQuery={setQuery} />
           {query.trim() && (
@@ -280,6 +357,7 @@ function App() {
               onPay={openPayment}
               onEdit={openEdit}
               onClear={() => setQuery("")}
+              canManage={canManage}
             />
           )}
           <div className="desktop-title">
@@ -287,10 +365,12 @@ function App() {
               <h2>Dashboard</h2>
               <p>Monitor your gym's finances and member dues</p>
             </div>
-            <div className="actions">
-              <button onClick={openAdd}><UserPlus size={17} /> Add Member</button>
-              <button className="primary" onClick={() => openPayment()}><Plus size={18} /> Add Payment</button>
-            </div>
+            {canManage && (
+              <div className="actions">
+                <button onClick={openAdd}><UserPlus size={17} /> Add Member</button>
+                <button className="primary" onClick={() => openPayment()}><Plus size={18} /> Add Payment</button>
+              </div>
+            )}
           </div>
 
           <Stats
@@ -312,6 +392,7 @@ function App() {
             onDelete={deleteMember}
             onPay={openPayment}
             onExport={exportCsv}
+            canManage={canManage}
           />
 
           <section className="bottom-grid">
@@ -335,6 +416,13 @@ function App() {
           onEdit={openEdit}
           onDelete={deleteMember}
           onPay={openPayment}
+          canManage={canManage}
+          authUser={authUser}
+          view={mobileView}
+          setView={setMobileView}
+          menuOpen={mobileMenuOpen}
+          setMenuOpen={setMobileMenuOpen}
+          onLogout={logout}
         />
       </main>
 
@@ -376,7 +464,7 @@ function App() {
   );
 }
 
-function Sidebar() {
+function Sidebar({ onLogout }: { onLogout: () => void }) {
   return (
     <aside className="sidebar">
       <div className="brand">
@@ -402,7 +490,7 @@ function Sidebar() {
         <small>Control Room</small>
         <p>Discipline today. Strength tomorrow. SPARK forever.</p>
       </section>
-      <a className="logout" href="#logout"><LogOut size={17} /> Logout</a>
+      <button className="logout" onClick={onLogout}><LogOut size={17} /> Logout</button>
     </aside>
   );
 }
@@ -429,11 +517,13 @@ function SearchResults({
   onPay,
   onEdit,
   onClear,
+  canManage,
 }: {
   members: Member[];
   onPay: (member: Member) => void;
   onEdit: (member: Member) => void;
   onClear: () => void;
+  canManage: boolean;
 }) {
   return (
     <section className="search-results" aria-live="polite">
@@ -452,8 +542,12 @@ function SearchResults({
                 <strong>{member.name}</strong>
                 <span>{member.phone} · {member.plan} · {money(member.amountDue)}</span>
               </div>
-              <button onClick={() => onPay(member)}><CreditCard size={15} /> Add Payment</button>
-              <button onClick={() => onEdit(member)}><Edit3 size={15} /> Edit</button>
+              {canManage && (
+                <>
+                  <button onClick={() => onPay(member)}><CreditCard size={15} /> Add Payment</button>
+                  <button onClick={() => onEdit(member)}><Edit3 size={15} /> Edit</button>
+                </>
+              )}
             </article>
           ))}
         </div>
@@ -562,12 +656,14 @@ function MembersTable({
   onDelete,
   onPay,
   onExport,
+  canManage,
 }: {
   members: Member[];
   onEdit: (member: Member) => void;
   onDelete: (id: number) => void;
   onPay: (member: Member) => void;
   onExport: () => void;
+  canManage: boolean;
 }) {
   return (
     <article className="panel members-table" id="members">
@@ -578,7 +674,7 @@ function MembersTable({
       <div className="table-wrap">
         <table>
           <thead>
-            <tr><th>Name</th><th>Phone</th><th>Plan</th><th>Payment Due</th><th>Amount</th><th>Paid Up To</th><th>Days Overdue</th><th>Action</th></tr>
+            <tr><th>Name</th><th>Phone</th><th>Plan</th><th>Payment Due</th><th>Amount</th><th>Paid Up To</th><th>Days Overdue</th>{canManage && <th>Action</th>}</tr>
           </thead>
           <tbody>
             {members.map((member) => (
@@ -590,13 +686,15 @@ function MembersTable({
                 <td>{money(member.amountDue)}</td>
                 <td>{prettyDate(member.paidUpTo)}</td>
                 <td className={member.daysOverdue > 0 ? "danger" : ""}>{member.daysOverdue > 0 ? `${member.daysOverdue} days` : "-"}</td>
-                <td>
-                  <div className="row-actions">
-                    <button onClick={() => onPay(member)} aria-label={`Add payment for ${member.name}`}><CreditCard size={15} /></button>
-                    <button onClick={() => onEdit(member)} aria-label={`Edit ${member.name}`}><Edit3 size={15} /></button>
-                    <button className="delete" onClick={() => onDelete(member.id)} aria-label={`Delete ${member.name}`}><Trash2 size={15} /></button>
-                  </div>
-                </td>
+                {canManage && (
+                  <td>
+                    <div className="row-actions">
+                      <button onClick={() => onPay(member)} aria-label={`Add payment for ${member.name}`}><CreditCard size={15} /></button>
+                      <button onClick={() => onEdit(member)} aria-label={`Edit ${member.name}`}><Edit3 size={15} /></button>
+                      <button className="delete" onClick={() => onDelete(member.id)} aria-label={`Delete ${member.name}`}><Trash2 size={15} /></button>
+                    </div>
+                  </td>
+                )}
               </tr>
             ))}
           </tbody>
@@ -656,6 +754,13 @@ function MobileDashboard({
   onEdit,
   onDelete,
   onPay,
+  canManage,
+  authUser,
+  view,
+  setView,
+  menuOpen,
+  setMenuOpen,
+  onLogout,
 }: {
   query: string;
   setQuery: (value: string) => void;
@@ -669,14 +774,41 @@ function MobileDashboard({
   onEdit: (member: Member) => void;
   onDelete: (id: number) => void;
   onPay: (member?: Member) => void;
+  canManage: boolean;
+  authUser: AuthUser;
+  view: MobileView;
+  setView: (view: MobileView) => void;
+  menuOpen: boolean;
+  setMenuOpen: (open: boolean) => void;
+  onLogout: () => void;
 }) {
+  function navigate(nextView: MobileView) {
+    setView(nextView);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
   return (
-    <section className="mobile-app">
+    <section className="mobile-app" id="mobile-dashboard">
       <header className="mobile-top">
-        <Menu size={22} />
+        <button className="mobile-menu-trigger" onClick={() => setMenuOpen(true)} aria-label="Open menu" aria-expanded={menuOpen}>
+          <Menu size={22} />
+        </button>
         <div className="mobile-brand">SP<span>A</span>RK</div>
         <button className="icon-btn" aria-label="Notifications"><Bell size={18} /><span>3</span></button>
       </header>
+
+      {menuOpen && (
+        <MobileDrawer
+          authUser={authUser}
+          canManage={canManage}
+          view={view}
+          onClose={() => setMenuOpen(false)}
+          onLogout={onLogout}
+          onAdd={onAdd}
+          onPay={onPay}
+          onNavigate={navigate}
+        />
+      )}
 
       <label className="mobile-search">
         <Search size={17} />
@@ -688,7 +820,7 @@ function MobileDashboard({
             <p>No member found.</p>
           ) : (
             members.slice(0, 4).map((member) => (
-              <button key={member.id} onClick={() => onPay(member)}>
+              <button key={member.id} onClick={() => canManage && onPay(member)}>
                 <span>{member.name}</span>
                 <small>{member.phone}</small>
                 <b>{money(member.amountDue)}</b>
@@ -698,57 +830,335 @@ function MobileDashboard({
         </section>
       )}
 
-      <section className="mobile-trainer">
+      <section className="mobile-trainer" id="mobile-profile">
         <img alt="Trainer profile" src="https://images.unsplash.com/photo-1568602471122-7832951cc4c5?auto=format&fit=crop&w=90&q=80" />
-        <div><strong>Trainer</strong><span>+91 98765 43210</span></div>
+        <div><strong>{authUser.name}</strong><span>{authUser.phone} · {authUser.role}</span></div>
         <ChevronRight size={18} />
       </section>
 
+      {view === "dashboard" && (
+        <>
+          <section className="mobile-view-head">
+            <div>
+              <h2>Dashboard</h2>
+              <p>Important gym fee signals</p>
+            </div>
+          </section>
+
+          <section className="mobile-hero">
+            <ShieldAlert size={32} />
+            <div><span>Total Receivable</span><strong>{money(totalReceivable)}</strong><p>From {members.length} members</p></div>
+          </section>
+
+          <section className="mobile-stats">
+            <MiniStat label="Members" value={String(members.length)} icon={<Users />} tone="violet" />
+            <MiniStat label="Overdue" value={String(overdueMembers.length)} icon={<ShieldAlert />} tone="red" />
+            <MiniStat label="Overdue Amount" value={money(overdueAmount)} icon={<IndianRupee />} tone="orange" />
+            <MiniStat label="Collection" value={money(monthlyCollection)} icon={<WalletCards />} tone="lime" />
+          </section>
+
+          {canManage && (
+            <>
+              <button className="mobile-primary" onClick={() => onPay()}><Plus size={19} /> Add Payment</button>
+              <button className="mobile-secondary" onClick={onAdd}><UserPlus size={18} /> Add Member</button>
+            </>
+          )}
+
+          <OverdueSummary buckets={overdueBuckets} overdueCount={overdueMembers.length} />
+
+          <article className="panel mobile-members">
+            <div className="panel-head">
+              <h3>Top Overdue Members</h3>
+              <button className="panel-link" onClick={() => navigate("overdue")}>View All</button>
+            </div>
+            {overdueMembers.slice(0, 5).map((member) => (
+              <MobileMemberRow
+                key={member.id}
+                member={member}
+                canManage={canManage}
+                onEdit={onEdit}
+                onDelete={onDelete}
+                onPay={onPay}
+                showOverdue
+              />
+            ))}
+          </article>
+        </>
+      )}
+
+      {view === "members" && (
+        <MobileMembersScreen
+          members={members}
+          canManage={canManage}
+          onAdd={onAdd}
+          onEdit={onEdit}
+          onDelete={onDelete}
+          onPay={onPay}
+        />
+      )}
+
+      {view === "fees" && (
+        <MobileFeesScreen
+          monthlyCollection={monthlyCollection}
+          canManage={canManage}
+          onPay={onPay}
+        />
+      )}
+
+      {view === "overdue" && (
+        <MobileOverdueScreen
+          overdueMembers={overdueMembers}
+          overdueBuckets={overdueBuckets}
+          overdueAmount={overdueAmount}
+          canManage={canManage}
+          onEdit={onEdit}
+          onDelete={onDelete}
+          onPay={onPay}
+        />
+      )}
+
+      <nav className="bottom-nav" aria-label="Mobile navigation">
+        <button className={view === "dashboard" ? "active" : ""} onClick={() => navigate("dashboard")}><Home size={19} />Dashboard</button>
+        <button className={view === "members" ? "active" : ""} onClick={() => navigate("members")}><Users size={19} />Members</button>
+        <button className={view === "fees" ? "active" : ""} onClick={() => navigate("fees")}><CreditCard size={19} />Fees</button>
+        <button className={view === "overdue" ? "active" : ""} onClick={() => navigate("overdue")}><ShieldAlert size={19} />Overdue</button>
+        <button onClick={() => setMenuOpen(true)}><MoreHorizontal size={19} />More</button>
+      </nav>
+    </section>
+  );
+}
+
+function MobileMembersScreen({
+  members,
+  canManage,
+  onAdd,
+  onEdit,
+  onDelete,
+  onPay,
+}: {
+  members: Member[];
+  canManage: boolean;
+  onAdd: () => void;
+  onEdit: (member: Member) => void;
+  onDelete: (id: number) => void;
+  onPay: (member: Member) => void;
+}) {
+  return (
+    <section className="mobile-screen">
+      <div className="mobile-view-head">
+        <div>
+          <h2>Members</h2>
+          <p>{members.length} gym members</p>
+        </div>
+        {canManage && <button onClick={onAdd}><UserPlus size={16} /> Add</button>}
+      </div>
+
+      <article className="panel mobile-members">
+        <div className="panel-head"><h3>All Members</h3><span>{members.length}</span></div>
+        {members.map((member) => (
+          <MobileMemberRow
+            key={member.id}
+            member={member}
+            canManage={canManage}
+            onEdit={onEdit}
+            onDelete={onDelete}
+            onPay={onPay}
+          />
+        ))}
+      </article>
+    </section>
+  );
+}
+
+function MobileFeesScreen({
+  monthlyCollection,
+  canManage,
+  onPay,
+}: {
+  monthlyCollection: number;
+  canManage: boolean;
+  onPay: (member?: Member) => void;
+}) {
+  return (
+    <section className="mobile-screen">
+      <div className="mobile-view-head">
+        <div>
+          <h2>Fees</h2>
+          <p>Plans, payments, and collection</p>
+        </div>
+      </div>
+
       <section className="mobile-hero">
-        <ShieldAlert size={32} />
-        <div><span>Total Receivable</span><strong>{money(totalReceivable)}</strong><p>From {members.length} members</p></div>
+        <WalletCards size={32} />
+        <div><span>This Month</span><strong>{money(monthlyCollection)}</strong><p>Total fee collection</p></div>
       </section>
 
-      <section className="mobile-stats">
-        <MiniStat label="Members" value={String(members.length)} icon={<Users />} tone="violet" />
-        <MiniStat label="Overdue" value={String(overdueMembers.length)} icon={<ShieldAlert />} tone="red" />
-        <MiniStat label="Overdue Amount" value={money(overdueAmount)} icon={<IndianRupee />} tone="orange" />
-        <MiniStat label="Collection" value={money(monthlyCollection)} icon={<WalletCards />} tone="lime" />
-      </section>
+      {canManage && <button className="mobile-primary" onClick={() => onPay()}><Plus size={19} /> Add Payment</button>}
 
-      <button className="mobile-primary" onClick={() => onPay()}><Plus size={19} /> Add Payment</button>
-      <button className="mobile-secondary" onClick={onAdd}><UserPlus size={18} /> Add Member</button>
+      <article className="panel plan-panel">
+        <div className="panel-head"><h3>Plans</h3><span>{plans.length}</span></div>
+        <div className="mobile-plan-list">
+          {plans.map((plan) => (
+            <div key={plan.name}>
+              <span>{plan.name}</span>
+              <strong>{money(plan.amount)}</strong>
+              <small>{plan.months} month{plan.months > 1 ? "s" : ""}</small>
+            </div>
+          ))}
+        </div>
+      </article>
+    </section>
+  );
+}
+
+function MobileOverdueScreen({
+  overdueMembers,
+  overdueBuckets,
+  overdueAmount,
+  canManage,
+  onEdit,
+  onDelete,
+  onPay,
+}: {
+  overdueMembers: Member[];
+  overdueBuckets: { label: string; members: Member[]; tone: string }[];
+  overdueAmount: number;
+  canManage: boolean;
+  onEdit: (member: Member) => void;
+  onDelete: (id: number) => void;
+  onPay: (member: Member) => void;
+}) {
+  return (
+    <section className="mobile-screen">
+      <div className="mobile-view-head">
+        <div>
+          <h2>Overdue</h2>
+          <p>{money(overdueAmount)} pending from {overdueMembers.length} members</p>
+        </div>
+      </div>
 
       <OverdueSummary buckets={overdueBuckets} overdueCount={overdueMembers.length} />
 
       <article className="panel mobile-members">
-        <div className="panel-head"><h3>Top Overdue Members</h3><a href="#members">View All</a></div>
-        {overdueMembers.slice(0, 5).map((member) => (
-          <div className="mobile-member-card" key={member.id}>
-            <div className="avatar">{initials(member.name)}</div>
-            <div>
-              <strong>{member.name}</strong>
-              <span>{member.phone}</span>
-            </div>
-            <b>{member.daysOverdue}d</b>
-            <strong>{money(member.amountDue)}</strong>
-            <div className="mobile-card-actions">
-              <button onClick={() => onPay(member)}><CreditCard size={15} /></button>
-              <button onClick={() => onEdit(member)}><Edit3 size={15} /></button>
-              <button onClick={() => onDelete(member.id)}><Trash2 size={15} /></button>
-            </div>
-          </div>
+        <div className="panel-head"><h3>Overdue Members</h3><span>{overdueMembers.length}</span></div>
+        {overdueMembers.map((member) => (
+          <MobileMemberRow
+            key={member.id}
+            member={member}
+            canManage={canManage}
+            onEdit={onEdit}
+            onDelete={onDelete}
+            onPay={onPay}
+            showOverdue
+          />
         ))}
       </article>
-
-      <nav className="bottom-nav">
-        <a className="active"><Home size={19} />Dashboard</a>
-        <a><Users size={19} />Members</a>
-        <a><CreditCard size={19} />Fees</a>
-        <a><ShieldAlert size={19} />Overdue</a>
-        <a><MoreHorizontal size={19} />More</a>
-      </nav>
     </section>
+  );
+}
+
+function MobileMemberRow({
+  member,
+  canManage,
+  onEdit,
+  onDelete,
+  onPay,
+  showOverdue = false,
+}: {
+  member: Member;
+  canManage: boolean;
+  onEdit: (member: Member) => void;
+  onDelete: (id: number) => void;
+  onPay: (member: Member) => void;
+  showOverdue?: boolean;
+}) {
+  return (
+    <div className="mobile-member-card">
+      <div className="avatar">{initials(member.name)}</div>
+      <div>
+        <strong>{member.name}</strong>
+        <span>{member.phone} · {member.plan}</span>
+      </div>
+      <b>{showOverdue && member.daysOverdue > 0 ? `${member.daysOverdue}d` : member.status}</b>
+      <strong>{money(member.amountDue)}</strong>
+      {canManage && (
+        <div className="mobile-card-actions">
+          <button onClick={() => onPay(member)} aria-label={`Add payment for ${member.name}`}><CreditCard size={15} /></button>
+          <button onClick={() => onEdit(member)} aria-label={`Edit ${member.name}`}><Edit3 size={15} /></button>
+          <button onClick={() => onDelete(member.id)} aria-label={`Delete ${member.name}`}><Trash2 size={15} /></button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MobileDrawer({
+  authUser,
+  canManage,
+  view,
+  onClose,
+  onLogout,
+  onAdd,
+  onPay,
+  onNavigate,
+}: {
+  authUser: AuthUser;
+  canManage: boolean;
+  view: MobileView;
+  onClose: () => void;
+  onLogout: () => void;
+  onAdd: () => void;
+  onPay: (member?: Member) => void;
+  onNavigate: (view: MobileView) => void;
+}) {
+  function run(action: () => void) {
+    action();
+    onClose();
+  }
+
+  return (
+    <div className="mobile-drawer-layer" role="presentation">
+      <button className="mobile-drawer-backdrop" onClick={onClose} aria-label="Close menu" />
+      <aside className="mobile-drawer" aria-label="Mobile menu">
+        <div className="drawer-head">
+          <div className="brand">
+            <h1>SP<span>A</span>RK</h1>
+            <p>Ignite your fitness</p>
+          </div>
+          <button className="drawer-close" onClick={onClose} aria-label="Close menu"><X size={22} /></button>
+        </div>
+
+        <nav className="drawer-nav">
+          <span>Main</span>
+          <button className={view === "dashboard" ? "active" : ""} onClick={() => run(() => onNavigate("dashboard"))}><Home size={24} /> Dashboard</button>
+          <button className={view === "members" ? "active" : ""} onClick={() => run(() => onNavigate("members"))}><Users size={24} /> Members</button>
+          <button className={view === "fees" ? "active" : ""} onClick={() => run(() => onNavigate("fees"))}><ReceiptText size={24} /> Plans</button>
+
+          <span>Fees Management</span>
+          <button className={view === "fees" ? "active" : ""} onClick={() => run(() => onNavigate("fees"))}><FileSpreadsheet size={24} /> Fees Records</button>
+          <button onClick={() => canManage && run(() => onPay())} disabled={!canManage}><CreditCard size={24} /> Payments</button>
+          <button className={view === "overdue" ? "active" : ""} onClick={() => run(() => onNavigate("overdue"))}><ShieldAlert size={24} /> Overdue</button>
+
+          <span>Reports & Automation</span>
+          <button onClick={() => run(() => onNavigate("overdue"))}><CalendarClock size={24} /> Reports</button>
+          <button onClick={() => run(() => onNavigate("dashboard"))}><Settings size={24} /> Automation</button>
+
+          <span>Settings</span>
+          <button onClick={() => canManage && run(onAdd)} disabled={!canManage}><UserPlus size={24} /> Users & Roles</button>
+          <button onClick={() => run(() => onNavigate("dashboard"))}><Settings size={24} /> Settings</button>
+        </nav>
+
+        <section className="drawer-gym-card">
+          <Zap size={34} />
+          <strong>SPARK GYM</strong>
+          <small>Control Room</small>
+          <p>Discipline today. Strength tomorrow. SPARK forever.</p>
+        </section>
+
+        <button className="drawer-logout" onClick={() => run(onLogout)}><LogOut size={22} /> Logout</button>
+        <p className="drawer-user">{authUser.name} Â· {authUser.role}</p>
+      </aside>
+    </div>
   );
 }
 
@@ -881,6 +1291,67 @@ function PaymentForm({
       <label>Paid Up To<input type="date" value={paidUpTo} readOnly /></label>
       <button className="primary" type="submit" disabled={!selectedMember}>Save Payment</button>
     </form>
+  );
+}
+
+function LoginScreen({ onLogin }: { onLogin: (phone: string, password: string) => boolean }) {
+  const [phone, setPhone] = useState("9876543211");
+  const [password, setPassword] = useState("Spark@123");
+  const [error, setError] = useState("");
+  const [forgotMode, setForgotMode] = useState(false);
+  const [resetMessage, setResetMessage] = useState("");
+
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError("");
+    if (!onLogin(phone.trim(), password)) {
+      setError("Invalid phone number or password.");
+    }
+  }
+
+  function forgotPassword(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const knownUser = demoUsers.find((user) => user.phone === phone.trim());
+    setResetMessage(
+      knownUser
+        ? "Reset link prepared. Backend will send this by SMS/email after provider setup."
+        : "If this phone exists, reset instructions will be sent."
+    );
+  }
+
+  return (
+    <main className="login-shell">
+      <section className="login-card">
+        <div className="brand">
+          <h1>SP<span>A</span>RK</h1>
+          <p>Fees Control Login</p>
+        </div>
+        {!forgotMode ? (
+          <form onSubmit={submit} className="login-form">
+            <h2>Login</h2>
+            <label>Phone Number<input value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="9876543211" /></label>
+            <label>Password<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Password" /></label>
+            {error && <p className="form-error">{error}</p>}
+            <button className="primary" type="submit">Login</button>
+            <button type="button" className="text-button" onClick={() => setForgotMode(true)}>Forgot password?</button>
+            <div className="demo-users">
+              <span>Demo access</span>
+              <small>Admin: 9876543210 / Spark@123</small>
+              <small>Trainer: 9876543211 / Spark@123</small>
+              <small>View only: 9876543212 / Spark@123</small>
+            </div>
+          </form>
+        ) : (
+          <form onSubmit={forgotPassword} className="login-form">
+            <h2>Forgot Password</h2>
+            <label>Phone Number<input value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="Registered phone number" /></label>
+            {resetMessage && <p className="form-success">{resetMessage}</p>}
+            <button className="primary" type="submit">Send Reset Instructions</button>
+            <button type="button" className="text-button" onClick={() => setForgotMode(false)}>Back to login</button>
+          </form>
+        )}
+      </section>
+    </main>
   );
 }
 

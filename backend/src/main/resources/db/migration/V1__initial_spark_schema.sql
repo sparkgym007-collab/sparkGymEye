@@ -5,8 +5,8 @@ create table if not exists app_user (
     email varchar(180),
     role varchar(32) not null check (role in ('ADMIN', 'TRAINER', 'MEMBER')),
     active boolean not null default true,
-    created_at timestamptz not null default now(),
-    updated_at timestamptz not null default now()
+    created_at timestamp with time zone not null default now(),
+    updated_at timestamp with time zone not null default now()
 );
 
 create table if not exists gym_plan (
@@ -15,8 +15,8 @@ create table if not exists gym_plan (
     duration_months integer not null check (duration_months > 0),
     amount numeric(12, 2) not null check (amount >= 0),
     active boolean not null default true,
-    created_at timestamptz not null default now(),
-    updated_at timestamptz not null default now()
+    created_at timestamp with time zone not null default now(),
+    updated_at timestamp with time zone not null default now()
 );
 
 create table if not exists member (
@@ -31,8 +31,8 @@ create table if not exists member (
     monthly_fee numeric(12, 2) not null,
     amount_due numeric(12, 2) not null default 0,
     status varchar(32) not null default 'ACTIVE' check (status in ('ACTIVE', 'DUE_SOON', 'OVERDUE', 'PAUSED')),
-    created_at timestamptz not null default now(),
-    updated_at timestamptz not null default now()
+    created_at timestamp with time zone not null default now(),
+    updated_at timestamp with time zone not null default now()
 );
 
 create table if not exists attendance (
@@ -42,7 +42,7 @@ create table if not exists attendance (
     attendance_date date not null default current_date,
     check_in_time time not null default current_time,
     marked_by varchar(80) not null default 'TRAINER',
-    created_at timestamptz not null default now()
+    created_at timestamp with time zone not null default now()
 );
 
 create index if not exists idx_attendance_date on attendance (attendance_date);
@@ -55,7 +55,7 @@ create table if not exists payment (
     duration_months integer not null default 1 check (duration_months > 0),
     paid_at date not null default current_date,
     received_by varchar(80) not null default 'ADMIN',
-    created_at timestamptz not null default now()
+    created_at timestamp with time zone not null default now()
 );
 
 create index if not exists idx_payment_roll_no on payment (roll_no);
@@ -70,14 +70,14 @@ create table if not exists report_settings (
     recipient_email varchar(180) not null,
     cc_email varchar(180),
     whatsapp_enabled boolean not null default false,
-    created_at timestamptz not null default now(),
-    updated_at timestamptz not null default now()
+    created_at timestamp with time zone not null default now(),
+    updated_at timestamp with time zone not null default now()
 );
 
 create table if not exists generated_report (
     id bigserial primary key,
     report_type varchar(80) not null,
-    generated_at timestamptz not null default now(),
+    generated_at timestamp with time zone not null default now(),
     file_name varchar(220),
     storage_path varchar(420),
     status varchar(60) not null,
@@ -91,23 +91,33 @@ create table if not exists notice (
     audience varchar(32) not null default 'ALL',
     active boolean not null default true,
     created_by varchar(80),
-    created_at timestamptz not null default now()
+    created_at timestamp with time zone not null default now()
 );
 
 insert into gym_plan (name, duration_months, amount)
-values
-    ('1 month', 1, 1500),
-    ('2 months', 2, 3000),
-    ('3 months', 3, 4500),
-    ('6 months', 6, 8000)
-on conflict do nothing;
+select '1 month', 1, 1500
+where not exists (select 1 from gym_plan where name = '1 month');
+
+insert into gym_plan (name, duration_months, amount)
+select '2 months', 2, 3000
+where not exists (select 1 from gym_plan where name = '2 months');
+
+insert into gym_plan (name, duration_months, amount)
+select '3 months', 3, 4500
+where not exists (select 1 from gym_plan where name = '3 months');
+
+insert into gym_plan (name, duration_months, amount)
+select '6 months', 6, 8000
+where not exists (select 1 from gym_plan where name = '6 months');
 
 insert into app_user (full_name, phone, email, role)
-values
-    ('SPARK Owner', '+919876543210', 'owner@sparkgym.in', 'ADMIN'),
-    ('SPARK Trainer', '+919876543211', 'trainer@sparkgym.in', 'TRAINER')
-on conflict (phone) do nothing;
+select 'SPARK Owner', '+919876543210', 'owner@sparkgym.in', 'ADMIN'
+where not exists (select 1 from app_user where phone = '+919876543210');
+
+insert into app_user (full_name, phone, email, role)
+select 'SPARK Trainer', '+919876543211', 'trainer@sparkgym.in', 'TRAINER'
+where not exists (select 1 from app_user where phone = '+919876543211');
 
 insert into report_settings (recipient_email, cc_email)
-values ('owner@sparkgym.in', 'trainer@sparkgym.in')
-on conflict do nothing;
+select 'owner@sparkgym.in', 'trainer@sparkgym.in'
+where not exists (select 1 from report_settings where report_type = 'OVERDUE_MEMBERS');

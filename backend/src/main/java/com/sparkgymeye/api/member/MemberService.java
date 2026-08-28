@@ -1,5 +1,6 @@
 package com.sparkgymeye.api.member;
 
+import com.sparkgymeye.api.security.AppUserRepository;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
@@ -10,9 +11,11 @@ import org.springframework.transaction.annotation.Transactional;
 public class MemberService {
 
     private final MemberRepository memberRepository;
+    private final AppUserRepository appUserRepository;
 
-    public MemberService(MemberRepository memberRepository) {
+    public MemberService(MemberRepository memberRepository, AppUserRepository appUserRepository) {
         this.memberRepository = memberRepository;
+        this.appUserRepository = appUserRepository;
     }
 
     public List<Member> findAll() {
@@ -25,7 +28,33 @@ public class MemberService {
     }
 
     public Member create(Member member) {
+        if (memberRepository.existsByPhone(member.getPhone()) || appUserRepository.existsByPhone(member.getPhone())) {
+            throw new IllegalArgumentException("Phone number already exists");
+        }
         return memberRepository.save(member);
+    }
+
+    public Member update(Long id, Member changedMember) {
+        Member member = memberRepository.findById(id).orElseThrow();
+        if (!member.getPhone().equals(changedMember.getPhone())
+                && (memberRepository.existsByPhone(changedMember.getPhone()) || appUserRepository.existsByPhone(changedMember.getPhone()))) {
+            throw new IllegalArgumentException("Phone number already exists");
+        }
+        member.setRollNo(changedMember.getRollNo());
+        member.setName(changedMember.getName());
+        member.setPhone(changedMember.getPhone());
+        member.setRole(changedMember.getRole());
+        member.setPlanName(changedMember.getPlanName());
+        member.setPlanStartDate(changedMember.getPlanStartDate());
+        member.setDueDate(changedMember.getDueDate());
+        member.setMonthlyFee(changedMember.getMonthlyFee());
+        member.setAmountDue(changedMember.getAmountDue());
+        member.setStatus(changedMember.getStatus());
+        return memberRepository.save(member);
+    }
+
+    public void delete(Long id) {
+        memberRepository.deleteById(id);
     }
 
     @Transactional
