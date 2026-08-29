@@ -21,6 +21,8 @@ import {
   Search,
   Settings,
   ShieldAlert,
+  Moon,
+  Sun,
   Trash2,
   UserPlus,
   Users,
@@ -68,6 +70,7 @@ type AuthUser = {
 };
 
 type MobileView = "dashboard" | "members" | "fees" | "overdue";
+type ThemeMode = "dark" | "light";
 
 type MemberForm = Omit<Member, "id" | "rollNo" | "daysOverdue" | "status"> & {
   paymentDate: string;
@@ -152,6 +155,10 @@ function normalizedPhoneKey(phone: string) {
   if (compact.startsWith("91") && compact.length === 12) return `+${compact}`;
   if (/^\d{10}$/.test(compact)) return `+91${compact}`;
   return compact;
+}
+
+function getInitialTheme(): ThemeMode {
+  return "dark";
 }
 
 function getStatus(dueDate: string, amountDue: number): Pick<Member, "status" | "daysOverdue"> {
@@ -292,7 +299,13 @@ function App() {
   const [paymentPlan, setPaymentPlan] = useState("1 Month");
   const [paymentSearch, setPaymentSearch] = useState("");
   const [appError, setAppError] = useState("");
+  const [theme, setTheme] = useState<ThemeMode>(getInitialTheme);
   const canManage = authUser?.role === "ADMIN" || authUser?.role === "TRAINER";
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    window.localStorage.setItem("spark-theme", theme);
+  }, [theme]);
 
   const filteredMembers = useMemo(() => {
     const term = query.trim().toLowerCase();
@@ -491,12 +504,16 @@ function App() {
     setPayments([]);
   }
 
+  function toggleTheme() {
+    setTheme((current) => current === "dark" ? "light" : "dark");
+  }
+
   if (authLoading) {
     return <main className="login-shell"><section className="login-card"><div className="brand"><h1>SP<span>A</span>RK</h1><p>Loading</p></div></section></main>;
   }
 
   if (!authUser) {
-    return <LoginScreen onLogin={login} onSignup={signup} />;
+    return <LoginScreen theme={theme} onToggleTheme={toggleTheme} onLogin={login} onSignup={signup} />;
   }
 
   function exportCsv() {
@@ -526,7 +543,7 @@ function App() {
       <main className="desktop-shell">
         <Sidebar onLogout={logout} />
         <section className="desktop-dashboard">
-          <Topbar query={query} setQuery={setQuery} />
+          <Topbar query={query} setQuery={setQuery} theme={theme} onToggleTheme={toggleTheme} />
           {appError && <p className="app-error">{appError}</p>}
           {query.trim() && (
             <SearchResults
@@ -559,6 +576,13 @@ function App() {
           />
 
           <section className="summary-grid">
+            <QuickActions
+              canManage={canManage}
+              onAdd={openAdd}
+              onPay={() => openPayment()}
+              onFees={() => document.getElementById("members")?.scrollIntoView({ behavior: "smooth" })}
+              onOverdue={() => document.getElementById("overdue")?.scrollIntoView({ behavior: "smooth" })}
+            />
             <OverdueSummary buckets={overdueBuckets} overdueCount={overdueMembers.length} />
             <RecentPayments payments={payments} />
           </section>
@@ -602,6 +626,8 @@ function App() {
           onLogout={logout}
           onProfile={openProfile}
           appError={appError}
+          theme={theme}
+          onToggleTheme={toggleTheme}
         />
       </main>
 
@@ -676,7 +702,26 @@ function Sidebar({ onLogout }: { onLogout: () => void }) {
   );
 }
 
-function Topbar({ query, setQuery }: { query: string; setQuery: (value: string) => void }) {
+function ThemeToggle({ theme, onToggle }: { theme: ThemeMode; onToggle: () => void }) {
+  const isLight = theme === "light";
+  return (
+    <button className="theme-toggle" type="button" onClick={onToggle} aria-label={`Switch to ${isLight ? "dark" : "light"} theme`}>
+      {isLight ? <Sun size={16} /> : <Moon size={16} />}
+    </button>
+  );
+}
+
+function Topbar({
+  query,
+  setQuery,
+  theme,
+  onToggleTheme,
+}: {
+  query: string;
+  setQuery: (value: string) => void;
+  theme: ThemeMode;
+  onToggleTheme: () => void;
+}) {
   return (
     <header className="topbar">
       <label className="search-field">
@@ -684,6 +729,7 @@ function Topbar({ query, setQuery }: { query: string; setQuery: (value: string) 
         <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search members by name or phone..." />
         <kbd>Ctrl</kbd><kbd>K</kbd>
       </label>
+      <ThemeToggle theme={theme} onToggle={onToggleTheme} />
       <button className="icon-btn" aria-label="Notifications"><Bell size={18} /><span>3</span></button>
       <div className="profile">
         <img alt="Trainer profile" src="https://images.unsplash.com/photo-1568602471122-7832951cc4c5?auto=format&fit=crop&w=90&q=80" />
@@ -777,7 +823,7 @@ function StatCard({ label, value, detail, tone, icon }: { label: string; value: 
 function OverdueSummary({ buckets, overdueCount }: { buckets: { label: string; members: Member[]; tone: string }[]; overdueCount: number }) {
   const total = Math.max(1, buckets.reduce((sum, bucket) => sum + bucket.members.reduce((part, member) => part + member.amountDue, 0), 0));
   return (
-    <article className="panel overdue-summary">
+    <article className="panel overdue-summary" id="overdue">
       <div className="panel-head">
         <h3>Overdue Summary</h3>
         <a href="#overdue">View All <ChevronRight size={15} /></a>
@@ -945,6 +991,8 @@ function MobileDashboard({
   onLogout,
   onProfile,
   appError,
+  theme,
+  onToggleTheme,
 }: {
   query: string;
   setQuery: (value: string) => void;
@@ -967,6 +1015,8 @@ function MobileDashboard({
   onLogout: () => void;
   onProfile: () => void;
   appError: string;
+  theme: ThemeMode;
+  onToggleTheme: () => void;
 }) {
   function navigate(nextView: MobileView) {
     setView(nextView);
@@ -980,7 +1030,10 @@ function MobileDashboard({
           <Menu size={22} />
         </button>
         <div className="mobile-brand">SP<span>A</span>RK</div>
-        <button className="icon-btn" aria-label="Notifications"><Bell size={18} /><span>3</span></button>
+        <div className="mobile-top-actions">
+          <ThemeToggle theme={theme} onToggle={onToggleTheme} />
+          <button className="icon-btn" aria-label="Notifications"><Bell size={18} /><span>3</span></button>
+        </div>
       </header>
 
       {menuOpen && (
@@ -993,6 +1046,8 @@ function MobileDashboard({
           onAdd={onAdd}
           onPay={onPay}
           onNavigate={navigate}
+          theme={theme}
+          onToggleTheme={onToggleTheme}
         />
       )}
 
@@ -1025,13 +1080,6 @@ function MobileDashboard({
 
       {view === "dashboard" && (
         <>
-          <section className="mobile-view-head">
-            <div>
-              <h2>Dashboard</h2>
-              <p>Important gym fee signals</p>
-            </div>
-          </section>
-
           <section className="mobile-hero">
             <ShieldAlert size={32} />
             <div><span>Total Receivable</span><strong>{money(totalReceivable)}</strong><p>From {members.length} members</p></div>
@@ -1044,12 +1092,13 @@ function MobileDashboard({
             <MiniStat label="Collection" value={money(monthlyCollection)} icon={<WalletCards />} tone="lime" />
           </section>
 
-          {canManage && (
-            <>
-              <button className="mobile-primary" onClick={() => onPay()}><Plus size={19} /> Add Payment</button>
-              <button className="mobile-secondary" onClick={onAdd}><UserPlus size={18} /> Add Member</button>
-            </>
-          )}
+          <QuickActions
+            canManage={canManage}
+            onAdd={onAdd}
+            onPay={() => onPay()}
+            onFees={() => navigate("fees")}
+            onOverdue={() => navigate("overdue")}
+          />
 
           <OverdueSummary buckets={overdueBuckets} overdueCount={overdueMembers.length} />
 
@@ -1154,6 +1203,32 @@ function MobileMembersScreen({
         ))}
       </article>
     </section>
+  );
+}
+
+function QuickActions({
+  canManage,
+  onAdd,
+  onPay,
+  onFees,
+  onOverdue,
+}: {
+  canManage: boolean;
+  onAdd: () => void;
+  onPay: () => void;
+  onFees: () => void;
+  onOverdue: () => void;
+}) {
+  return (
+    <article className="panel quick-actions">
+      <h3>Quick Actions</h3>
+      <div>
+        <button onClick={onAdd} disabled={!canManage}><UserPlus size={24} /> Add Member</button>
+        <button onClick={onPay} disabled={!canManage}><IndianRupee size={24} /> Record Payment</button>
+        <button onClick={onFees}><FileSpreadsheet size={24} /> Fees Records</button>
+        <button onClick={onOverdue}><ShieldAlert size={24} /> View Overdue</button>
+      </div>
+    </article>
   );
 }
 
@@ -1289,6 +1364,8 @@ function MobileDrawer({
   onAdd,
   onPay,
   onNavigate,
+  theme,
+  onToggleTheme,
 }: {
   authUser: AuthUser;
   canManage: boolean;
@@ -1298,6 +1375,8 @@ function MobileDrawer({
   onAdd: () => void;
   onPay: (member?: Member) => void;
   onNavigate: (view: MobileView) => void;
+  theme: ThemeMode;
+  onToggleTheme: () => void;
 }) {
   function run(action: () => void) {
     action();
@@ -1313,6 +1392,7 @@ function MobileDrawer({
             <h1>SP<span>A</span>RK</h1>
             <p>Ignite your fitness</p>
           </div>
+          <ThemeToggle theme={theme} onToggle={onToggleTheme} />
           <button className="drawer-close" onClick={onClose} aria-label="Close menu"><X size={22} /></button>
         </div>
 
@@ -1522,9 +1602,13 @@ function ProfileForm({
 }
 
 function LoginScreen({
+  theme,
+  onToggleTheme,
   onLogin,
   onSignup,
 }: {
+  theme: ThemeMode;
+  onToggleTheme: () => void;
   onLogin: (phone: string, password: string) => Promise<void>;
   onSignup: (fullName: string, phone: string, password: string) => Promise<void>;
 }) {
@@ -1552,6 +1636,7 @@ function LoginScreen({
   return (
     <main className="login-shell">
       <section className="login-card">
+        <ThemeToggle theme={theme} onToggle={onToggleTheme} />
         <div className="brand">
           <h1>SP<span>A</span>RK</h1>
           <p>Admin Login</p>
