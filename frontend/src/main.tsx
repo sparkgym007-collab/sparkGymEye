@@ -15,6 +15,7 @@ import {
   LogOut,
   Menu,
   MoreHorizontal,
+  PhoneCall,
   Plus,
   ReceiptText,
   Search,
@@ -141,6 +142,18 @@ function initials(name: string) {
     .toUpperCase();
 }
 
+function phoneHref(phone: string) {
+  return `tel:${phone.replace(/[^\d+]/g, "")}`;
+}
+
+function normalizedPhoneKey(phone: string) {
+  const compact = phone.trim().replace(/[\s()-]/g, "");
+  if (compact.startsWith("+91") && compact.length === 13) return compact;
+  if (compact.startsWith("91") && compact.length === 12) return `+${compact}`;
+  if (/^\d{10}$/.test(compact)) return `+91${compact}`;
+  return compact;
+}
+
 function getStatus(dueDate: string, amountDue: number): Pick<Member, "status" | "daysOverdue"> {
   const due = new Date(`${dueDate}T00:00:00`);
   const days = Math.ceil((today.getTime() - due.getTime()) / 86400000);
@@ -217,14 +230,19 @@ function toApiMember(member: MemberForm, id?: number, rollNo?: string): ApiMembe
 }
 
 async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, {
-    credentials: "include",
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...init.headers,
-    },
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}${path}`, {
+      credentials: "include",
+      ...init,
+      headers: {
+        "Content-Type": "application/json",
+        ...init.headers,
+      },
+    });
+  } catch {
+    throw new Error("Could not reach the backend API. Check the production API URL and try again.");
+  }
   if (!response.ok) {
     const message = await response.text();
     let errorMessage = message;
@@ -335,6 +353,7 @@ function App() {
 
   function openAdd() {
     if (!canManage) return;
+    setAppError("");
     setSelectedMember(null);
     setForm(emptyForm);
     setDialog("add");
@@ -342,6 +361,7 @@ function App() {
 
   function openEdit(member: Member) {
     if (!canManage) return;
+    setAppError("");
     setSelectedMember(member);
     setForm({
       name: member.name,
@@ -376,6 +396,14 @@ function App() {
     event.preventDefault();
     if (!canManage) return;
     setAppError("");
+    const phoneKey = normalizedPhoneKey(form.phone);
+    const duplicateMember = members.find((member) =>
+      normalizedPhoneKey(member.phone) === phoneKey && member.id !== selectedMember?.id
+    );
+    if (duplicateMember) {
+      setAppError("Phone number already exists");
+      return;
+    }
     try {
       if (dialog === "edit" && selectedMember) {
         await apiRequest<ApiMember>(`/api/members/${selectedMember.id}`, {
@@ -608,7 +636,7 @@ function App() {
             ) : dialog === "profile" ? (
               <ProfileForm authUser={authUser} onSubmit={updateProfile} onDone={() => setDialog(null)} />
             ) : (
-              <MemberEditor mode={dialog} form={form} setForm={setForm} onSubmit={saveMember} />
+              <MemberEditor mode={dialog} form={form} setForm={setForm} error={appError} onSubmit={saveMember} />
             )}
           </section>
         </div>
@@ -844,6 +872,7 @@ function MembersTable({
                     <div className="row-actions">
                       <button onClick={() => onPay(member)} aria-label={`Add payment for ${member.name}`}><CreditCard size={15} /></button>
                       <button onClick={() => onEdit(member)} aria-label={`Edit ${member.name}`}><Edit3 size={15} /></button>
+                      <a className="call-action" href={phoneHref(member.phone)} aria-label={`Call ${member.name}`}><PhoneCall size={15} /></a>
                       <button className="delete" onClick={() => onDelete(member.id)} aria-label={`Delete ${member.name}`}><Trash2 size={15} /></button>
                     </div>
                   </td>
@@ -1243,6 +1272,7 @@ function MobileMemberRow({
         <div className="mobile-card-actions">
           <button onClick={() => onPay(member)} aria-label={`Add payment for ${member.name}`}><CreditCard size={15} /></button>
           <button onClick={() => onEdit(member)} aria-label={`Edit ${member.name}`}><Edit3 size={15} /></button>
+          <a className="call-action" href={phoneHref(member.phone)} aria-label={`Call ${member.name}`}><PhoneCall size={15} /></a>
           <button onClick={() => onDelete(member.id)} aria-label={`Delete ${member.name}`}><Trash2 size={15} /></button>
         </div>
       )}
@@ -1334,11 +1364,13 @@ function MemberEditor({
   mode,
   form,
   setForm,
+  error,
   onSubmit,
 }: {
   mode: "add" | "edit";
   form: MemberForm;
   setForm: React.Dispatch<React.SetStateAction<MemberForm>>;
+  error: string;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }) {
   function applyPlan(planName: string, paymentDate = form.paymentDate) {
@@ -1364,6 +1396,7 @@ function MemberEditor({
       <label>Payment Date<input type="date" required value={form.paymentDate} onChange={(event) => applyPaymentDate(event.target.value)} /></label>
       <label>Paid Up To<input type="date" required value={form.paidUpTo} readOnly /></label>
       <label>Amount Due<input type="number" min="0" required value={form.amountDue} onChange={(event) => setForm({ ...form, amountDue: Number(event.target.value) })} /></label>
+      {error && <p className="form-error">{error}</p>}
       <button className="primary" type="submit">{mode === "add" ? "Create Member" : "Save Changes"}</button>
     </form>
   );

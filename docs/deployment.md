@@ -47,6 +47,8 @@ Recommended frontend environment variable:
 VITE_API_BASE_URL=<deployed-backend-url>
 ```
 
+Set this in the Vercel frontend project, then redeploy the frontend. Without it, the production browser falls back to `http://localhost:9898`, which only works on your development machine.
+
 Do not put Neon credentials in Vercel frontend variables. Browser code is public to users, so database credentials must remain only on the backend server.
 
 ## Local Development

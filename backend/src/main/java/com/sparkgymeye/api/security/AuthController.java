@@ -1,9 +1,10 @@
 package com.sparkgymeye.api.security;
 
-import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.ResponseCookie;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.CookieValue;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -49,12 +50,15 @@ public class AuthController {
     }
 
     private void addSessionCookie(HttpServletResponse response, HttpServletRequest servletRequest, String token, int maxAge) {
-        Cookie cookie = new Cookie(SESSION_COOKIE, token);
-        cookie.setHttpOnly(true);
-        cookie.setSecure(isSecureRequest(servletRequest));
-        cookie.setPath("/");
-        cookie.setMaxAge(maxAge);
-        response.addCookie(cookie);
+        boolean secure = isSecureRequest(servletRequest);
+        ResponseCookie cookie = ResponseCookie.from(SESSION_COOKIE, token)
+                .httpOnly(true)
+                .secure(secure)
+                .sameSite(secure ? "None" : "Lax")
+                .path("/")
+                .maxAge(maxAge)
+                .build();
+        response.addHeader(HttpHeaders.SET_COOKIE, cookie.toString());
     }
 
     @PostMapping("/logout")
@@ -66,12 +70,15 @@ public class AuthController {
         if (token != null) {
             authService.logout(token);
         }
-        Cookie cookie = new Cookie(SESSION_COOKIE, "");
-        cookie.setHttpOnly(true);
-        cookie.setSecure(isSecureRequest(servletRequest));
-        cookie.setPath("/");
-        cookie.setMaxAge(0);
-        response.addCookie(cookie);
+        boolean secure = isSecureRequest(servletRequest);
+        ResponseCookie cookie = ResponseCookie.from(SESSION_COOKIE, "")
+                .httpOnly(true)
+                .secure(secure)
+                .sameSite(secure ? "None" : "Lax")
+                .path("/")
+                .maxAge(0)
+                .build();
+        response.addHeader(HttpHeaders.SET_COOKIE, cookie.toString());
         return ResponseEntity.noContent().build();
     }
 

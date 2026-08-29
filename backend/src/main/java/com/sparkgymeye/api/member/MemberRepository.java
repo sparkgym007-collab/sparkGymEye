@@ -9,5 +9,6 @@ public interface MemberRepository extends JpaRepository<Member, Long> {
     List<Member> findByDueDateBefore(LocalDate date);
     List<Member> findByStatus(MemberStatus status);
     Optional<Member> findByRollNo(String rollNo);
+    Optional<Member> findByPhone(String phone);
     boolean existsByPhone(String phone);
 }

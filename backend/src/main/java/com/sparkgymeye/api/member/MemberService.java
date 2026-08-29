@@ -1,6 +1,6 @@
 package com.sparkgymeye.api.member;
 
-import com.sparkgymeye.api.security.AppUserRepository;
+import com.sparkgymeye.api.security.AuthService;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
@@ -11,11 +11,11 @@ import org.springframework.transaction.annotation.Transactional;
 public class MemberService {
 
     private final MemberRepository memberRepository;
-    private final AppUserRepository appUserRepository;
+    private final AuthService authService;
 
-    public MemberService(MemberRepository memberRepository, AppUserRepository appUserRepository) {
+    public MemberService(MemberRepository memberRepository, AuthService authService) {
         this.memberRepository = memberRepository;
-        this.appUserRepository = appUserRepository;
+        this.authService = authService;
     }
 
     public List<Member> findAll() {
@@ -28,21 +28,24 @@ public class MemberService {
     }
 
     public Member create(Member member) {
-        if (memberRepository.existsByPhone(member.getPhone()) || appUserRepository.existsByPhone(member.getPhone())) {
+        String normalizedPhone = authService.normalizePhone(member.getPhone());
+        if (memberPhoneExists(member.getPhone(), null) || authService.findByPhoneInput(member.getPhone()).isPresent()) {
             throw new IllegalArgumentException("Phone number already exists");
         }
+        member.setPhone(normalizedPhone);
         return memberRepository.save(member);
     }
 
     public Member update(Long id, Member changedMember) {
         Member member = memberRepository.findById(id).orElseThrow();
-        if (!member.getPhone().equals(changedMember.getPhone())
-                && (memberRepository.existsByPhone(changedMember.getPhone()) || appUserRepository.existsByPhone(changedMember.getPhone()))) {
+        String normalizedPhone = authService.normalizePhone(changedMember.getPhone());
+        if (!member.getPhone().equals(normalizedPhone)
+                && (memberPhoneExists(changedMember.getPhone(), member.getId()) || authService.findByPhoneInput(changedMember.getPhone()).isPresent())) {
             throw new IllegalArgumentException("Phone number already exists");
         }
         member.setRollNo(changedMember.getRollNo());
         member.setName(changedMember.getName());
-        member.setPhone(changedMember.getPhone());
+        member.setPhone(normalizedPhone);
         member.setRole(changedMember.getRole());
         member.setPlanName(changedMember.getPlanName());
         member.setPlanStartDate(changedMember.getPlanStartDate());
@@ -51,6 +54,19 @@ public class MemberService {
         member.setAmountDue(changedMember.getAmountDue());
         member.setStatus(changedMember.getStatus());
         return memberRepository.save(member);
+    }
+
+    private boolean memberPhoneExists(String phone, Long ignoredMemberId) {
+        String normalized = authService.normalizePhone(phone);
+        if (memberRepository.findByPhone(normalized)
+                .filter(existing -> ignoredMemberId == null || !existing.getId().equals(ignoredMemberId))
+                .isPresent()) {
+            return true;
+        }
+        String compact = normalized.startsWith("+91") ? normalized.substring(3) : normalized;
+        return memberRepository.findByPhone(compact)
+                .filter(existing -> ignoredMemberId == null || !existing.getId().equals(ignoredMemberId))
+                .isPresent();
     }
 
     public void delete(Long id) {

@@ -834,7 +834,9 @@ th {
 }
 
 .row-actions button,
-.mobile-card-actions button {
+.row-actions a,
+.mobile-card-actions button,
+.mobile-card-actions a {
   width: 30px;
   height: 30px;
   min-height: 30px;
@@ -845,6 +847,21 @@ th {
 .row-actions .delete,
 .mobile-card-actions button:last-child {
   color: #ff4d67;
+}
+
+.row-actions a,
+.mobile-card-actions a {
+  display: grid;
+  place-items: center;
+  border: 1px solid #213743;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  text-decoration: none;
+}
+
+.row-actions .call-action,
+.mobile-card-actions .call-action {
+  color: #75ffb1;
 }
 
 .plan-list {
