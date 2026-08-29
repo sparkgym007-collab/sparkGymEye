@@ -35,6 +35,8 @@ Dockerfile Path: Dockerfile
 Compute Plan: Free
 ```
 
+The backend container defaults to `PORT=10000` and binds to `0.0.0.0` so Render can detect the web service port. Local non-Docker development still defaults to `9898`.
+
 Do not put backend database variables into the Vercel frontend project. Put them only in the Java backend service environment.
 
 ## Frontend on Vercel

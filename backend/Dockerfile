@@ -11,6 +11,7 @@ WORKDIR /app
 COPY --from=build /workspace/build/libs/*.jar app.jar
 
 ENV SPRING_PROFILES_ACTIVE=neon
-EXPOSE 9898
+ENV PORT=10000
+EXPOSE 10000
 
 ENTRYPOINT ["java", "-jar", "/app/app.jar"]
