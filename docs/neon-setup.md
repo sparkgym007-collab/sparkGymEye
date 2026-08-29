@@ -31,7 +31,7 @@ If a deployment fails because Flyway reports a checksum mismatch for an already-
 gradle -p backend repairDatabase
 ```
 
-Then run the deployment or migration command again.
+If your host does not provide a backend shell, set `SPARK_FLYWAY_REPAIR_ON_STARTUP=true` for one deploy instead. After it starts successfully, remove the variable and redeploy normally.
 
 The migration creates:
 

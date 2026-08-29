@@ -23,7 +23,9 @@ If Render fails with a Flyway checksum mismatch after an already-applied migrati
 gradle -p backend repairDatabase
 ```
 
-After the repair finishes, redeploy the service normally. Keep Flyway validation enabled so future migration drift still fails loudly.
+If you cannot open a backend service shell on Render, set `SPARK_FLYWAY_REPAIR_ON_STARTUP=true` for one deploy instead. After that deploy starts successfully, remove the variable and redeploy normally.
+
+Keep Flyway validation enabled so future migration drift still fails loudly.
 
 For Docker-based backend deployment, use:
 

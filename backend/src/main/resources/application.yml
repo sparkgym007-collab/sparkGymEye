@@ -22,6 +22,8 @@ server:
   port: ${PORT:9898}
 
 spark:
+  flyway:
+    repair-on-startup: ${SPARK_FLYWAY_REPAIR_ON_STARTUP:false}
   security:
     seed:
       enabled: ${SECURITY_SEED_ENABLED:true}
