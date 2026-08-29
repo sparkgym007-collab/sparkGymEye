@@ -25,6 +25,14 @@ The pooler host can be used later for high-concurrency deployments:
 gradle -p backend migrateDatabase
 ```
 
+If a deployment fails because Flyway reports a checksum mismatch for an already-applied migration, repair the schema history once:
+
+```bash
+gradle -p backend repairDatabase
+```
+
+Then run the deployment or migration command again.
+
 The migration creates:
 
 - `app_user`

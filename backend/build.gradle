@@ -41,3 +41,10 @@ tasks.register('migrateDatabase', JavaExec) {
     classpath = sourceSets.main.runtimeClasspath
     mainClass = 'com.sparkgymeye.api.database.DatabaseMigrator'
 }
+
+tasks.register('repairDatabase', JavaExec) {
+    group = 'database'
+    description = 'Repairs Flyway schema history checksums using DATABASE_URL, DATABASE_USERNAME, and DATABASE_PASSWORD.'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.sparkgymeye.api.database.DatabaseRepairer'
+}

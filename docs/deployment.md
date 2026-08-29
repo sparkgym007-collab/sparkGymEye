@@ -17,6 +17,14 @@ The backend can be deployed to a Java-friendly host such as Render, Railway, Fly
 
 The backend accepts Neon URLs in either `postgresql` URL form or JDBC form through `DATABASE_URL`.
 
+If Render fails with a Flyway checksum mismatch after an already-applied migration file changed, run this once from the backend service shell:
+
+```bash
+gradle -p backend repairDatabase
+```
+
+After the repair finishes, redeploy the service normally. Keep Flyway validation enabled so future migration drift still fails loudly.
+
 For Docker-based backend deployment, use:
 
 ```text
