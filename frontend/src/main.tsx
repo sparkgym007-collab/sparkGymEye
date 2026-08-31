@@ -111,6 +111,7 @@ type ApiAuthUser = {
 const API_BASE = import.meta.env.DEV ? (import.meta.env.VITE_API_BASE_URL ?? "http://localhost:9898") : "";
 const HEALTH_RETRY_DELAYS_MS = [0, 2000, 4000, 8000, 15000, 15000, 15000, 15000];
 const HEALTH_TIMEOUT_MS = 12000;
+const TRAINER_IMAGE_URL = "https://res.cloudinary.com/wsgsjtrj/image/upload/v1787749514/ChatGPT_Image_Aug_26_2026_06_34_20_PM.png";
 const today = new Date();
 
 const emptyForm: MemberForm = {
@@ -175,6 +176,13 @@ function getStatus(dueDate: string, amountDue: number): Pick<Member, "status" | 
     return { status: "Due soon", daysOverdue: 0 };
   }
   return { status: "Active", daysOverdue: 0 };
+}
+
+function daysUntilDue(dueDate: string) {
+  const now = new Date();
+  const due = new Date(`${dueDate}T00:00:00`);
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  return Math.ceil((due.getTime() - startOfToday.getTime()) / 86400000);
 }
 
 function toUiStatus(status: ApiMemberStatus): MemberStatus {
@@ -371,6 +379,12 @@ function App() {
   }, [members, query]);
 
   const overdueMembers = members.filter((member) => member.status === "Overdue");
+  const expiringMembers = members
+    .filter((member) => {
+      const daysLeft = daysUntilDue(member.dueDate);
+      return daysLeft >= 0 && daysLeft <= 3;
+    })
+    .sort((first, second) => daysUntilDue(first.dueDate) - daysUntilDue(second.dueDate));
   const totalReceivable = members.reduce((sum, member) => sum + member.amountDue, 0);
   const monthlyCollection = payments.reduce((sum, payment) => sum + payment.amount, 0);
   const overdueAmount = overdueMembers.reduce((sum, member) => sum + member.amountDue, 0);
@@ -700,6 +714,7 @@ function App() {
               onOverdue={() => document.getElementById("overdue")?.scrollIntoView({ behavior: "smooth" })}
             />
             <OverdueSummary buckets={overdueBuckets} overdueCount={overdueMembers.length} />
+            <ExpiringSoonPanel members={expiringMembers} onEdit={openEdit} canManage={canManage} />
             <RecentPayments payments={payments} />
           </section>
 
@@ -725,6 +740,7 @@ function App() {
           setQuery={setQuery}
           members={filteredMembers}
           overdueMembers={overdueMembers}
+          expiringMembers={expiringMembers}
           totalReceivable={totalReceivable}
           overdueAmount={overdueAmount}
           monthlyCollection={monthlyCollection}
@@ -872,7 +888,7 @@ function Topbar({
       <ThemeToggle theme={theme} onToggle={onToggleTheme} />
       <button className="icon-btn" aria-label="Notifications"><Bell size={18} /><span>3</span></button>
       <div className="profile">
-        <img alt="Trainer profile" src="https://images.unsplash.com/photo-1568602471122-7832951cc4c5?auto=format&fit=crop&w=90&q=80" />
+        <img alt="Trainer profile" src={TRAINER_IMAGE_URL} />
         <div><strong>Trainer</strong><small>+91 98765 43210</small></div>
       </div>
     </header>
@@ -961,14 +977,18 @@ function StatCard({ label, value, detail, tone, icon }: { label: string; value: 
 }
 
 function OverdueSummary({ buckets, overdueCount }: { buckets: { label: string; members: Member[]; tone: string }[]; overdueCount: number }) {
+  const [open, setOpen] = useState(true);
   const total = Math.max(1, buckets.reduce((sum, bucket) => sum + bucket.members.reduce((part, member) => part + member.amountDue, 0), 0));
   return (
-    <article className="panel overdue-summary" id="overdue">
+    <article className={`panel overdue-summary collapsible-panel ${open ? "open" : "closed"}`} id="overdue">
       <div className="panel-head">
         <h3>Overdue Summary</h3>
-        <a href="#overdue">View All <ChevronRight size={15} /></a>
+        <button className="collapse-toggle" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
+          <span>{open ? "Hide" : "Show"}</span>
+          <ChevronRight size={16} />
+        </button>
       </div>
-      <div className="donut-row">
+      <div className="collapse-body donut-row">
         <div className="donut"><strong>{overdueCount}</strong><span>Overdue Members</span></div>
         <div className="bucket-list">
           {buckets.map((bucket) => {
@@ -1012,6 +1032,57 @@ function RecentPayments({ payments }: { payments: Payment[] }) {
             ))}
           </tbody>
         </table>
+      </div>
+    </article>
+  );
+}
+
+function ExpiringSoonPanel({
+  members,
+  onEdit,
+  canManage,
+}: {
+  members: Member[];
+  onEdit: (member: Member) => void;
+  canManage: boolean;
+}) {
+  const [open, setOpen] = useState(true);
+  return (
+    <article className={`panel expiring-panel collapsible-panel ${open ? "open" : "closed"}`}>
+      <div className="panel-head">
+        <h3>Expiring Soon</h3>
+        <button className="collapse-toggle" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
+          <span>{members.length}</span>
+          <ChevronRight size={16} />
+        </button>
+      </div>
+      <div className="collapse-body">
+        {members.length === 0 ? (
+          <p className="empty-panel">No subscriptions expire in the next 3 days.</p>
+        ) : (
+          <div className="expiring-list">
+            {members.slice(0, 5).map((member) => {
+              const daysLeft = daysUntilDue(member.dueDate);
+              const label = daysLeft === 0 ? "Expires today" : `${daysLeft}d left`;
+              return (
+                <div key={member.id}>
+                  <span className="avatar">{initials(member.name)}</span>
+                  <div>
+                    <strong>{member.name}</strong>
+                    <small>{member.phone} · {member.plan}</small>
+                  </div>
+                  <div className="expiring-actions">
+                    <b>{label}</b>
+                    <span>
+                      {canManage && <button onClick={() => onEdit(member)} aria-label={`Edit ${member.name}`}><Edit3 size={15} /></button>}
+                      <a className="call-action" href={phoneHref(member.phone)} aria-label={`Call ${member.name}`}><PhoneCall size={15} /></a>
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     </article>
   );
@@ -1114,6 +1185,7 @@ function MobileDashboard({
   setQuery,
   members,
   overdueMembers,
+  expiringMembers,
   totalReceivable,
   overdueAmount,
   monthlyCollection,
@@ -1138,6 +1210,7 @@ function MobileDashboard({
   setQuery: (value: string) => void;
   members: Member[];
   overdueMembers: Member[];
+  expiringMembers: Member[];
   totalReceivable: number;
   overdueAmount: number;
   monthlyCollection: number;
@@ -1213,7 +1286,7 @@ function MobileDashboard({
       {appError && <p className="app-error">{appError}</p>}
 
       <button className="mobile-trainer" id="mobile-profile" onClick={onProfile}>
-        <img alt="Trainer profile" src="https://images.unsplash.com/photo-1568602471122-7832951cc4c5?auto=format&fit=crop&w=90&q=80" />
+        <img alt="Trainer profile" src={TRAINER_IMAGE_URL} />
         <div><strong>{authUser.name}</strong><span>{authUser.phone} · {authUser.role}</span></div>
         <ChevronRight size={18} />
       </button>
@@ -1242,23 +1315,15 @@ function MobileDashboard({
 
           <OverdueSummary buckets={overdueBuckets} overdueCount={overdueMembers.length} />
 
-          <article className="panel mobile-members">
-            <div className="panel-head">
-              <h3>Top Overdue Members</h3>
-              <button className="panel-link" onClick={() => navigate("overdue")}>View All</button>
-            </div>
-            {overdueMembers.slice(0, 5).map((member) => (
-              <MobileMemberRow
-                key={member.id}
-                member={member}
-                canManage={canManage}
-                onEdit={onEdit}
-                onDelete={onDelete}
-                onPay={onPay}
-                showOverdue
-              />
-            ))}
-          </article>
+          <OverdueMembersPanel
+            overdueMembers={overdueMembers}
+            canManage={canManage}
+            onEdit={onEdit}
+            onDelete={onDelete}
+            onPay={onPay}
+          />
+
+          <ExpiringSoonPanel members={expiringMembers} onEdit={onEdit} canManage={canManage} />
         </>
       )}
 
@@ -1301,6 +1366,51 @@ function MobileDashboard({
         <button onClick={() => setMenuOpen(true)}><MoreHorizontal size={19} />More</button>
       </nav>
     </section>
+  );
+}
+
+function OverdueMembersPanel({
+  overdueMembers,
+  canManage,
+  onEdit,
+  onDelete,
+  onPay,
+}: {
+  overdueMembers: Member[];
+  canManage: boolean;
+  onEdit: (member: Member) => void;
+  onDelete: (member: Member) => void;
+  onPay: (member: Member) => void;
+}) {
+  const [open, setOpen] = useState(true);
+
+  return (
+    <article className={`panel mobile-members collapsible-panel ${open ? "open" : "closed"}`}>
+      <div className="panel-head">
+        <h3>Overdue Members</h3>
+        <button className="collapse-toggle" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
+          <span>{overdueMembers.length}</span>
+          <ChevronRight size={16} />
+        </button>
+      </div>
+      <div className="collapse-body">
+        {overdueMembers.length === 0 ? (
+          <p className="empty-panel">No overdue members.</p>
+        ) : (
+          overdueMembers.map((member) => (
+            <MobileMemberRow
+              key={member.id}
+              member={member}
+              canManage={canManage}
+              onEdit={onEdit}
+              onDelete={onDelete}
+              onPay={onPay}
+              showOverdue
+            />
+          ))
+        )}
+      </div>
+    </article>
   );
 }
 
@@ -1441,20 +1551,13 @@ function MobileOverdueScreen({
 
       <OverdueSummary buckets={overdueBuckets} overdueCount={overdueMembers.length} />
 
-      <article className="panel mobile-members">
-        <div className="panel-head"><h3>Overdue Members</h3><span>{overdueMembers.length}</span></div>
-        {overdueMembers.map((member) => (
-          <MobileMemberRow
-            key={member.id}
-            member={member}
-            canManage={canManage}
-            onEdit={onEdit}
-            onDelete={onDelete}
-            onPay={onPay}
-            showOverdue
-          />
-        ))}
-      </article>
+      <OverdueMembersPanel
+        overdueMembers={overdueMembers}
+        canManage={canManage}
+        onEdit={onEdit}
+        onDelete={onDelete}
+        onPay={onPay}
+      />
     </section>
   );
 }

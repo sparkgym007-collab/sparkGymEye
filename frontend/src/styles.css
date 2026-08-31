@@ -961,6 +961,123 @@ td,
   font-weight: var(--weight-semibold);
 }
 
+.collapse-toggle {
+  min-height: 30px;
+  border: 1px solid rgba(223, 255, 0, 0.26);
+  border-radius: 8px;
+  background: rgba(8, 18, 25, 0.72);
+  color: #dfff00;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 9px;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-bold);
+}
+
+.collapse-toggle svg {
+  transition: transform 0.22s ease;
+}
+
+.collapsible-panel.open .collapse-toggle svg {
+  transform: rotate(90deg);
+}
+
+.collapse-body {
+  max-height: 2400px;
+  overflow: hidden;
+  opacity: 1;
+  transform: translateY(0);
+  transition: max-height 0.28s ease, opacity 0.22s ease, transform 0.22s ease, margin-top 0.22s ease;
+}
+
+.collapsible-panel.closed .collapse-body {
+  max-height: 0;
+  opacity: 0;
+  transform: translateY(-8px);
+  pointer-events: none;
+}
+
+.collapsible-panel.closed .donut-row {
+  margin-top: 0;
+}
+
+.empty-panel {
+  margin-top: 14px;
+  color: #9faab2;
+}
+
+.expiring-list {
+  margin-top: 14px;
+  display: grid;
+  gap: 10px;
+}
+
+.expiring-list > div {
+  min-height: 58px;
+  padding: 10px;
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.expiring-list strong,
+.expiring-list small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.expiring-list strong {
+  color: var(--text);
+  font-size: var(--text-sm);
+}
+
+.expiring-list small {
+  margin-top: 3px;
+  color: #9faab2;
+  font-size: var(--text-xs);
+}
+
+.expiring-actions {
+  display: grid;
+  justify-items: end;
+  gap: 7px;
+}
+
+.expiring-actions b {
+  color: #ffd36a;
+  font-size: var(--text-sm);
+  white-space: nowrap;
+}
+
+.expiring-actions span {
+  display: flex;
+  gap: 7px;
+}
+
+.expiring-actions button,
+.expiring-actions a {
+  width: 31px;
+  height: 31px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #223844;
+  border-radius: 8px;
+  background: #0a161f;
+  color: #dce8ee;
+}
+
+.expiring-actions .call-action {
+  color: #45e08b;
+}
+
 .donut-row {
   margin-top: 22px;
   display: grid;
@@ -1525,6 +1642,11 @@ th {
 }
 
 .mobile-members {
+  display: grid;
+  gap: 10px;
+}
+
+.mobile-members .collapse-body {
   display: grid;
   gap: 10px;
 }
