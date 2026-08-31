@@ -71,6 +71,8 @@ type AuthUser = {
 
 type MobileView = "dashboard" | "members" | "fees" | "overdue";
 type ThemeMode = "dark" | "light";
+type StartupStatus = "checking" | "warming" | "unavailable";
+type BusyAction = "member" | "payment" | "profile" | "login" | "delete" | null;
 
 type MemberForm = Omit<Member, "id" | "rollNo" | "daysOverdue" | "status"> & {
   paymentDate: string;
@@ -107,6 +109,8 @@ type ApiAuthUser = {
 };
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:9898";
+const HEALTH_RETRY_DELAYS_MS = [0, 2000, 4000, 8000, 15000, 15000, 15000, 15000];
+const HEALTH_TIMEOUT_MS = 12000;
 const today = new Date();
 
 const emptyForm: MemberForm = {
@@ -179,6 +183,10 @@ function toUiStatus(status: ApiMemberStatus): MemberStatus {
   return "Active";
 }
 
+function statusClass(status: MemberStatus) {
+  return status.toLowerCase().replace(" ", "-");
+}
+
 function mapAuthUser(user: ApiAuthUser): AuthUser {
   return {
     id: user.id,
@@ -236,6 +244,49 @@ function toApiMember(member: MemberForm, id?: number, rollNo?: string): ApiMembe
   };
 }
 
+function delay(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+async function fetchWithTimeout(path: string, timeoutMs: number): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(`${API_BASE}${path}`, {
+      credentials: "omit",
+      signal: controller.signal,
+    });
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
+async function waitForBackendReady(onAttempt: (attempt: number, status: StartupStatus) => void) {
+  for (let index = 0; index < HEALTH_RETRY_DELAYS_MS.length; index += 1) {
+    const attempt = index + 1;
+    const waitMs = HEALTH_RETRY_DELAYS_MS[index];
+    if (waitMs > 0) {
+      onAttempt(attempt, "warming");
+      await delay(waitMs);
+    } else {
+      onAttempt(attempt, "checking");
+    }
+
+    const startedAt = performance.now();
+    try {
+      const response = await fetchWithTimeout("/api/health", HEALTH_TIMEOUT_MS);
+      const duration = Math.round(performance.now() - startedAt);
+      console.info(`[SPARK] Backend health attempt ${attempt} completed in ${duration}ms with ${response.status}`);
+      if (response.ok) return;
+    } catch (error) {
+      const duration = Math.round(performance.now() - startedAt);
+      console.info(`[SPARK] Backend health attempt ${attempt} did not complete in ${duration}ms`, error);
+    }
+  }
+
+  throw new Error("Backend health check did not become ready.");
+}
+
 async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
   let response: Response;
   try {
@@ -285,6 +336,8 @@ function plusMonths(date: string, months: number) {
 function App() {
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
+  const [startupStatus, setStartupStatus] = useState<StartupStatus>("checking");
+  const [startupAttempt, setStartupAttempt] = useState(1);
   const [members, setMembers] = useState<Member[]>([]);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [mobileView, setMobileView] = useState<MobileView>("dashboard");
@@ -292,6 +345,7 @@ function App() {
   const [query, setQuery] = useState("");
   const [dialog, setDialog] = useState<"add" | "edit" | "payment" | "profile" | null>(null);
   const [selectedMember, setSelectedMember] = useState<Member | null>(null);
+  const [memberToDelete, setMemberToDelete] = useState<Member | null>(null);
   const [form, setForm] = useState<MemberForm>(emptyForm);
   const [paymentAmount, setPaymentAmount] = useState(600);
   const [paymentMode, setPaymentMode] = useState<Payment["mode"]>("UPI");
@@ -299,6 +353,7 @@ function App() {
   const [paymentPlan, setPaymentPlan] = useState("1 Month");
   const [paymentSearch, setPaymentSearch] = useState("");
   const [appError, setAppError] = useState("");
+  const [busyAction, setBusyAction] = useState<BusyAction>(null);
   const [theme, setTheme] = useState<ThemeMode>(getInitialTheme);
   const canManage = authUser?.role === "ADMIN" || authUser?.role === "TRAINER";
 
@@ -328,13 +383,23 @@ function App() {
   }
 
   async function loadAppData() {
-    const nextMembers = await loadMembers();
-    const apiPayments = await apiRequest<ApiPayment[]>("/api/payments");
+    const [apiMembers, apiPayments] = await Promise.all([
+      apiRequest<ApiMember[]>("/api/members"),
+      apiRequest<ApiPayment[]>("/api/payments"),
+    ]);
+    const nextMembers = apiMembers.map(mapApiMember);
+    setMembers(nextMembers);
     setPayments(apiPayments.map((payment) => mapApiPayment(payment, nextMembers)));
   }
 
-  useEffect(() => {
-    apiRequest<ApiAuthUser>("/api/auth/me")
+  async function initializeApp() {
+    setAuthLoading(true);
+    try {
+      await waitForBackendReady((attempt, status) => {
+        setStartupAttempt(attempt);
+        setStartupStatus(status);
+      });
+      await apiRequest<ApiAuthUser>("/api/auth/me")
       .then((user) => {
         setAuthUser(mapAuthUser(user));
         return loadAppData();
@@ -342,8 +407,16 @@ function App() {
       .catch(() => {
         setAuthUser(null);
         setMembers([]);
+        setPayments([]);
       })
       .finally(() => setAuthLoading(false));
+    } catch {
+      setStartupStatus("unavailable");
+    }
+  }
+
+  useEffect(() => {
+    initializeApp();
   }, []);
 
   useEffect(() => {
@@ -390,7 +463,7 @@ function App() {
 
   function openPayment(member?: Member) {
     if (!canManage) return;
-    const target = member ?? overdueMembers[0] ?? members[0];
+    const target = member ?? null;
     setSelectedMember(target);
     const plan = plans.find((item) => item.name === target?.plan) ?? plans[0];
     setPaymentAmount(target?.amountDue || plan.amount);
@@ -405,9 +478,16 @@ function App() {
     setDialog("profile");
   }
 
+  function confirmDelete(member: Member) {
+    if (!canManage) return;
+    setAppError("");
+    setMemberToDelete(member);
+  }
+
   async function saveMember(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!canManage) return;
+    if (busyAction) return;
     setAppError("");
     const phoneKey = normalizedPhoneKey(form.phone);
     const duplicateMember = members.find((member) =>
@@ -417,6 +497,7 @@ function App() {
       setAppError("Phone number already exists");
       return;
     }
+    setBusyAction("member");
     try {
       if (dialog === "edit" && selectedMember) {
         await apiRequest<ApiMember>(`/api/members/${selectedMember.id}`, {
@@ -433,17 +514,24 @@ function App() {
       setDialog(null);
     } catch (error) {
       setAppError(error instanceof Error ? error.message : "Could not save member");
+    } finally {
+      setBusyAction(null);
     }
   }
 
   async function deleteMember(memberId: number) {
     if (!canManage) return;
+    if (busyAction) return;
     setAppError("");
+    setBusyAction("delete");
     try {
       await apiRequest<void>(`/api/members/${memberId}`, { method: "DELETE" });
       await loadAppData();
     } catch (error) {
       setAppError(error instanceof Error ? error.message : "Could not delete member");
+    } finally {
+      setBusyAction(null);
+      setMemberToDelete(null);
     }
   }
 
@@ -451,8 +539,10 @@ function App() {
     event.preventDefault();
     if (!canManage) return;
     if (!selectedMember) return;
+    if (busyAction) return;
     const plan = plans.find((item) => item.name === paymentPlan) ?? plans[0];
     setAppError("");
+    setBusyAction("payment");
     try {
       await apiRequest<ApiPayment>("/api/payments", {
         method: "POST",
@@ -468,33 +558,53 @@ function App() {
       setDialog(null);
     } catch (error) {
       setAppError(error instanceof Error ? error.message : "Could not record payment");
+    } finally {
+      setBusyAction(null);
     }
   }
 
   async function login(phone: string, password: string) {
+    if (busyAction) return;
+    setBusyAction("login");
+    try {
     const user = await apiRequest<ApiAuthUser>("/api/auth/login", {
       method: "POST",
       body: JSON.stringify({ phone, password }),
     });
     setAuthUser(mapAuthUser(user));
     await loadAppData();
+    } finally {
+      setBusyAction(null);
+    }
   }
 
   async function signup(fullName: string, phone: string, password: string) {
+    if (busyAction) return;
+    setBusyAction("login");
+    try {
     const user = await apiRequest<ApiAuthUser>("/api/auth/signup", {
       method: "POST",
       body: JSON.stringify({ fullName, phone, password }),
     });
     setAuthUser(mapAuthUser(user));
     await loadAppData();
+    } finally {
+      setBusyAction(null);
+    }
   }
 
   async function updateProfile(fullName: string, phone: string) {
+    if (busyAction) return;
+    setBusyAction("profile");
+    try {
     const user = await apiRequest<ApiAuthUser>("/api/auth/me", {
       method: "PUT",
       body: JSON.stringify({ fullName, phone }),
     });
     setAuthUser(mapAuthUser(user));
+    } finally {
+      setBusyAction(null);
+    }
   }
 
   async function logout() {
@@ -509,11 +619,17 @@ function App() {
   }
 
   if (authLoading) {
-    return <main className="login-shell"><section className="login-card"><div className="brand"><h1>SP<span>A</span>RK</h1><p>Loading</p></div></section></main>;
+    return (
+      <StartupScreen
+        status={startupStatus}
+        attempt={startupAttempt}
+        onRetry={initializeApp}
+      />
+    );
   }
 
   if (!authUser) {
-    return <LoginScreen theme={theme} onToggleTheme={toggleTheme} onLogin={login} onSignup={signup} />;
+    return <LoginScreen theme={theme} onToggleTheme={toggleTheme} onLogin={login} onSignup={signup} busy={busyAction === "login"} />;
   }
 
   function exportCsv() {
@@ -590,7 +706,7 @@ function App() {
           <MembersTable
             members={filteredMembers}
             onEdit={openEdit}
-            onDelete={deleteMember}
+            onDelete={confirmDelete}
             onPay={openPayment}
             onExport={exportCsv}
             canManage={canManage}
@@ -615,7 +731,7 @@ function App() {
           overdueBuckets={overdueBuckets}
           onAdd={openAdd}
           onEdit={openEdit}
-          onDelete={deleteMember}
+          onDelete={confirmDelete}
           onPay={openPayment}
           canManage={canManage}
           authUser={authUser}
@@ -634,7 +750,7 @@ function App() {
       {dialog && (
         <div className="modal-backdrop" role="presentation">
           <section className="modal" role="dialog" aria-modal="true">
-            <button className="modal-close" onClick={() => setDialog(null)} aria-label="Close dialog">
+            <button className="modal-close" onClick={() => setDialog(null)} aria-label="Close dialog" disabled={busyAction !== null}>
               <X size={18} />
             </button>
             {dialog === "payment" ? (
@@ -658,12 +774,36 @@ function App() {
                 setPaymentSearch={setPaymentSearch}
                 setSelectedMember={setSelectedMember}
                 onSubmit={recordPayment}
+                busy={busyAction === "payment"}
               />
             ) : dialog === "profile" ? (
-              <ProfileForm authUser={authUser} onSubmit={updateProfile} onDone={() => setDialog(null)} />
+              <ProfileForm authUser={authUser} onSubmit={updateProfile} onDone={() => setDialog(null)} busy={busyAction === "profile"} />
             ) : (
-              <MemberEditor mode={dialog} form={form} setForm={setForm} error={appError} onSubmit={saveMember} />
+              <MemberEditor mode={dialog} form={form} setForm={setForm} error={appError} onSubmit={saveMember} busy={busyAction === "member"} />
             )}
+          </section>
+        </div>
+      )}
+
+      {memberToDelete && (
+        <div className="modal-backdrop" role="presentation">
+          <section className="modal confirm-modal" role="dialog" aria-modal="true" aria-labelledby="delete-title">
+            <button className="modal-close" onClick={() => setMemberToDelete(null)} aria-label="Close dialog" disabled={busyAction !== null}>
+              <X size={18} />
+            </button>
+            <div className="confirm-icon"><Trash2 size={22} /></div>
+            <h3 id="delete-title">Delete member?</h3>
+            <p>
+              This will remove {memberToDelete.name} from SPARK records. Please confirm before deleting.
+            </p>
+            {busyAction === "delete" && <SavingGlow message="Deleting member record" />}
+            <div className="confirm-actions">
+              <button className="ghost" type="button" onClick={() => setMemberToDelete(null)} disabled={busyAction !== null}>Cancel</button>
+              <button className="danger-button" type="button" onClick={() => deleteMember(memberToDelete.id)} disabled={busyAction !== null}>
+                {busyAction === "delete" && <span className="button-loader danger-loader" aria-hidden="true" />}
+                <span>{busyAction === "delete" ? "Deleting..." : "Delete"}</span>
+              </button>
+            </div>
           </section>
         </div>
       )}
@@ -887,7 +1027,7 @@ function MembersTable({
 }: {
   members: Member[];
   onEdit: (member: Member) => void;
-  onDelete: (id: number) => void;
+  onDelete: (member: Member) => void;
   onPay: (member: Member) => void;
   onExport: () => void;
   canManage: boolean;
@@ -919,7 +1059,7 @@ function MembersTable({
                       <button onClick={() => onPay(member)} aria-label={`Add payment for ${member.name}`}><CreditCard size={15} /></button>
                       <button onClick={() => onEdit(member)} aria-label={`Edit ${member.name}`}><Edit3 size={15} /></button>
                       <a className="call-action" href={phoneHref(member.phone)} aria-label={`Call ${member.name}`}><PhoneCall size={15} /></a>
-                      <button className="delete" onClick={() => onDelete(member.id)} aria-label={`Delete ${member.name}`}><Trash2 size={15} /></button>
+                      <button className="delete" onClick={() => onDelete(member)} aria-label={`Delete ${member.name}`}><Trash2 size={15} /></button>
                     </div>
                   </td>
                 )}
@@ -1004,7 +1144,7 @@ function MobileDashboard({
   overdueBuckets: { label: string; members: Member[]; tone: string }[];
   onAdd: () => void;
   onEdit: (member: Member) => void;
-  onDelete: (id: number) => void;
+  onDelete: (member: Member) => void;
   onPay: (member?: Member) => void;
   canManage: boolean;
   authUser: AuthUser;
@@ -1176,7 +1316,7 @@ function MobileMembersScreen({
   canManage: boolean;
   onAdd: () => void;
   onEdit: (member: Member) => void;
-  onDelete: (id: number) => void;
+  onDelete: (member: Member) => void;
   onPay: (member: Member) => void;
 }) {
   return (
@@ -1287,7 +1427,7 @@ function MobileOverdueScreen({
   overdueAmount: number;
   canManage: boolean;
   onEdit: (member: Member) => void;
-  onDelete: (id: number) => void;
+  onDelete: (member: Member) => void;
   onPay: (member: Member) => void;
 }) {
   return (
@@ -1330,7 +1470,7 @@ function MobileMemberRow({
   member: Member;
   canManage: boolean;
   onEdit: (member: Member) => void;
-  onDelete: (id: number) => void;
+  onDelete: (member: Member) => void;
   onPay: (member: Member) => void;
   showOverdue?: boolean;
 }) {
@@ -1341,14 +1481,16 @@ function MobileMemberRow({
         <strong>{member.name}</strong>
         <span>{member.phone} · {member.plan}</span>
       </div>
-      <b>{showOverdue && member.daysOverdue > 0 ? `${member.daysOverdue}d` : member.status}</b>
+      <b className={`member-status ${statusClass(member.status)}`}>
+        {showOverdue && member.daysOverdue > 0 ? `${member.daysOverdue}d` : member.status}
+      </b>
       <strong>{money(member.amountDue)}</strong>
       {canManage && (
         <div className="mobile-card-actions">
           <button onClick={() => onPay(member)} aria-label={`Add payment for ${member.name}`}><CreditCard size={15} /></button>
           <button onClick={() => onEdit(member)} aria-label={`Edit ${member.name}`}><Edit3 size={15} /></button>
           <a className="call-action" href={phoneHref(member.phone)} aria-label={`Call ${member.name}`}><PhoneCall size={15} /></a>
-          <button onClick={() => onDelete(member.id)} aria-label={`Delete ${member.name}`}><Trash2 size={15} /></button>
+          <button onClick={() => onDelete(member)} aria-label={`Delete ${member.name}`}><Trash2 size={15} /></button>
         </div>
       )}
     </div>
@@ -1446,12 +1588,14 @@ function MemberEditor({
   setForm,
   error,
   onSubmit,
+  busy,
 }: {
   mode: "add" | "edit";
   form: MemberForm;
   setForm: React.Dispatch<React.SetStateAction<MemberForm>>;
   error: string;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  busy: boolean;
 }) {
   function applyPlan(planName: string, paymentDate = form.paymentDate) {
     const plan = plans.find((item) => item.name === planName) ?? plans[0];
@@ -1466,18 +1610,25 @@ function MemberEditor({
   }
 
   return (
-    <form className="editor-form" onSubmit={onSubmit}>
+    <form className="editor-form" onSubmit={onSubmit} aria-busy={busy}>
       <h3>{mode === "add" ? "Add Member" : "Edit Member"}</h3>
-      <label>Name<input required value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></label>
-      <label>Phone<input required value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} /></label>
-      <label>Plan<select value={form.plan} onChange={(event) => {
-        applyPlan(event.target.value);
-      }}>{plans.map((plan) => <option key={plan.name}>{plan.name}</option>)}</select></label>
-      <label>Payment Date<input type="date" required value={form.paymentDate} onChange={(event) => applyPaymentDate(event.target.value)} /></label>
-      <label>Paid Up To<input type="date" required value={form.paidUpTo} readOnly /></label>
-      <label>Amount Due<input type="number" min="0" required value={form.amountDue} onChange={(event) => setForm({ ...form, amountDue: Number(event.target.value) })} /></label>
+      <fieldset disabled={busy}>
+        <label>Name<input required value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></label>
+        <label>Phone<input required value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} /></label>
+        <label>Plan<select value={form.plan} onChange={(event) => {
+          applyPlan(event.target.value);
+        }}>{plans.map((plan) => <option key={plan.name}>{plan.name}</option>)}</select></label>
+        <label>Payment Date<input type="date" required value={form.paymentDate} onChange={(event) => applyPaymentDate(event.target.value)} /></label>
+        <label>Paid Up To<input type="date" required value={form.paidUpTo} readOnly /></label>
+        <label>Amount Due<input type="number" min="0" required value={form.amountDue} onChange={(event) => setForm({ ...form, amountDue: Number(event.target.value) })} /></label>
+      </fieldset>
       {error && <p className="form-error">{error}</p>}
-      <button className="primary" type="submit">{mode === "add" ? "Create Member" : "Save Changes"}</button>
+      {busy && <SavingGlow message={mode === "add" ? "Securing new member record" : "Updating member record"} />}
+      <LoadingButton
+        label={mode === "add" ? "Create Member" : "Save Changes"}
+        loadingLabel={mode === "add" ? "Creating member..." : "Saving changes..."}
+        busy={busy}
+      />
     </form>
   );
 }
@@ -1498,6 +1649,7 @@ function PaymentForm({
   setPaymentSearch,
   setSelectedMember,
   onSubmit,
+  busy,
 }: {
   selectedMember: Member | null;
   paymentAmount: number;
@@ -1514,18 +1666,20 @@ function PaymentForm({
   setPaymentSearch: (value: string) => void;
   setSelectedMember: (member: Member | null) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  busy: boolean;
 }) {
   const searchTerm = paymentSearch.trim().toLowerCase();
   const matchedMembers = searchTerm
     ? members.filter((member) =>
         [member.name, member.phone].some((value) => value.toLowerCase().includes(searchTerm))
       )
-    : members.slice(0, 5);
+    : [];
 
   return (
-    <form className="editor-form" onSubmit={onSubmit}>
+    <form className="editor-form" onSubmit={onSubmit} aria-busy={busy}>
       <h3>Add Payment</h3>
       <p>{selectedMember ? `${selectedMember.name} · ${selectedMember.phone}` : "Search and select a member first"}</p>
+      <fieldset disabled={busy}>
       <label className="full-field">Search Member
         <input
           value={paymentSearch}
@@ -1537,6 +1691,8 @@ function PaymentForm({
         />
       </label>
       <div className="member-picker">
+        {!searchTerm && <p className="picker-hint">Type a name or phone number to find a member.</p>}
+        {searchTerm && matchedMembers.length === 0 && <p className="picker-hint">No matching members found.</p>}
         {matchedMembers.slice(0, 5).map((member) => (
           <button
             type="button"
@@ -1560,7 +1716,9 @@ function PaymentForm({
       <label>Amount<input type="number" min="1" required value={paymentAmount} onChange={(event) => setPaymentAmount(Number(event.target.value))} /></label>
       <label>Payment Mode<select value={paymentMode} onChange={(event) => setPaymentMode(event.target.value as Payment["mode"])}><option>UPI</option><option>Cash</option><option>Card</option></select></label>
       <label>Paid Up To<input type="date" value={paidUpTo} readOnly /></label>
-      <button className="primary" type="submit" disabled={!selectedMember}>Save Payment</button>
+      </fieldset>
+      {busy && <SavingGlow message="Syncing payment with SPARK records" />}
+      <LoadingButton label="Save Payment" loadingLabel="Saving payment..." busy={busy} disabled={!selectedMember} />
     </form>
   );
 }
@@ -1569,10 +1727,12 @@ function ProfileForm({
   authUser,
   onSubmit,
   onDone,
+  busy,
 }: {
   authUser: AuthUser;
   onSubmit: (fullName: string, phone: string) => Promise<void>;
   onDone: () => void;
+  busy: boolean;
 }) {
   const [fullName, setFullName] = useState(authUser.name);
   const [phone, setPhone] = useState(authUser.phone);
@@ -1590,14 +1750,88 @@ function ProfileForm({
   }
 
   return (
-    <form className="editor-form" onSubmit={submit}>
+    <form className="editor-form" onSubmit={submit} aria-busy={busy}>
       <h3>My Profile</h3>
       <p>{authUser.role}</p>
-      <label>Name<input required value={fullName} onChange={(event) => setFullName(event.target.value)} /></label>
-      <label>Phone<input required value={phone} onChange={(event) => setPhone(event.target.value)} /></label>
+      <fieldset disabled={busy}>
+        <label>Name<input required value={fullName} onChange={(event) => setFullName(event.target.value)} /></label>
+        <label>Phone<input required value={phone} onChange={(event) => setPhone(event.target.value)} /></label>
+      </fieldset>
       {error && <p className="form-error">{error}</p>}
-      <button className="primary" type="submit">Save Profile</button>
+      {busy && <SavingGlow message="Updating your profile" />}
+      <LoadingButton label="Save Profile" loadingLabel="Saving profile..." busy={busy} />
     </form>
+  );
+}
+
+function LoadingButton({
+  label,
+  loadingLabel,
+  busy,
+  disabled = false,
+}: {
+  label: string;
+  loadingLabel: string;
+  busy: boolean;
+  disabled?: boolean;
+}) {
+  return (
+    <button className="primary loading-button" type="submit" disabled={disabled || busy}>
+      {busy && <span className="button-loader" aria-hidden="true" />}
+      <span>{busy ? loadingLabel : label}</span>
+    </button>
+  );
+}
+
+function SavingGlow({ message }: { message: string }) {
+  return (
+    <div className="saving-glow" role="status">
+      <span className="saving-bolt"><Zap size={14} /></span>
+      <span>{message}</span>
+      <i aria-hidden="true" />
+    </div>
+  );
+}
+
+function StartupScreen({
+  status,
+  attempt,
+  onRetry,
+}: {
+  status: StartupStatus;
+  attempt: number;
+  onRetry: () => void;
+}) {
+  const isUnavailable = status === "unavailable";
+  const title = isUnavailable ? "SPARK is taking a little longer to start." : "Waking up SPARK...";
+  const message = status === "checking"
+    ? "Checking the control room."
+    : isUnavailable
+      ? "The backend did not answer yet. Try again in a moment."
+      : "This may take a moment after a quiet period.";
+
+  return (
+    <main className="login-shell startup-shell">
+      <section className="login-card startup-card" aria-live="polite">
+        <div className="brand">
+          <h1>SP<span>A</span>RK</h1>
+          <p>GymEye</p>
+        </div>
+        <div className="startup-status">
+          {!isUnavailable && (
+            <div className="startup-pulse" aria-hidden="true">
+              <span />
+              <span />
+              <span />
+            </div>
+          )}
+          <h2>{title}</h2>
+          <p>{message}</p>
+          <small>Connection attempt {attempt}</small>
+          {isUnavailable && <button className="primary" type="button" onClick={onRetry}>Try Again</button>}
+        </div>
+      </section>
+    </main>
   );
 }
 
@@ -1606,11 +1840,13 @@ function LoginScreen({
   onToggleTheme,
   onLogin,
   onSignup,
+  busy,
 }: {
   theme: ThemeMode;
   onToggleTheme: () => void;
   onLogin: (phone: string, password: string) => Promise<void>;
   onSignup: (fullName: string, phone: string, password: string) => Promise<void>;
+  busy: boolean;
 }) {
   const [fullName, setFullName] = useState("");
   const [phone, setPhone] = useState("");
@@ -1641,20 +1877,27 @@ function LoginScreen({
           <h1>SP<span>A</span>RK</h1>
           <p>Admin Login</p>
         </div>
-        <form onSubmit={submit} className="login-form">
+        <form onSubmit={submit} className="login-form" aria-busy={busy}>
           <h2>{signupMode ? "Create Member Account" : "Admin Access"}</h2>
-          {signupMode && <label>Name<input required value={fullName} onChange={(event) => setFullName(event.target.value)} placeholder="Your full name" /></label>}
-          <label>Phone Number<input value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="+91 98765 43210" /></label>
-          <PasswordField
-            label={signupMode ? "Create Password" : "Admin PIN / Password"}
-            value={password}
-            onChange={setPassword}
-            visible={showPassword}
-            onToggle={() => setShowPassword((value) => !value)}
-          />
+          <fieldset disabled={busy}>
+            {signupMode && <label>Name<input required value={fullName} onChange={(event) => setFullName(event.target.value)} placeholder="Your full name" /></label>}
+            <label>Phone Number<input value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="+91 98765 43210" /></label>
+            <PasswordField
+              label={signupMode ? "Create Password" : "Admin PIN / Password"}
+              value={password}
+              onChange={setPassword}
+              visible={showPassword}
+              onToggle={() => setShowPassword((value) => !value)}
+            />
+          </fieldset>
           {error && <p className="form-error">{error}</p>}
-          <button className="primary" type="submit">{signupMode ? "Create Member Account" : "Login"}</button>
-          <button type="button" className="text-button" onClick={() => {
+          {busy && <SavingGlow message={signupMode ? "Creating your SPARK access" : "Checking secure access"} />}
+          <LoadingButton
+            label={signupMode ? "Create Member Account" : "Login"}
+            loadingLabel={signupMode ? "Creating account..." : "Signing in..."}
+            busy={busy}
+          />
+          <button type="button" className="text-button" disabled={busy} onClick={() => {
             setSignupMode(!signupMode);
             setError("");
           }}>
