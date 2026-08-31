@@ -91,6 +91,9 @@ select {
 input,
 select,
 textarea {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   font-size: var(--input-font);
 }
 
@@ -430,6 +433,7 @@ p {
 }
 
 .login-form label {
+  min-width: 0;
   display: grid;
   gap: 7px;
   color: #d8e1e7;
@@ -437,6 +441,9 @@ p {
 }
 
 .login-form input {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   min-height: 46px;
   padding: 0 13px;
   border: 1px solid #29414f;
@@ -446,6 +453,8 @@ p {
 }
 
 .password-field {
+  width: 100%;
+  min-width: 0;
   min-height: 46px;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 44px;
@@ -1750,6 +1759,7 @@ th {
 }
 
 .editor-form label {
+  min-width: 0;
   display: grid;
   gap: 7px;
   color: #d8e1e7;
@@ -1758,6 +1768,9 @@ th {
 
 .editor-form input,
 .editor-form select {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   min-height: 42px;
   padding: 0 12px;
   border: 1px solid #29414f;
@@ -1769,6 +1782,13 @@ th {
 .editor-form input[readonly] {
   color: #dfff00;
   background: #101c25;
+}
+
+.editor-form input[type="date"],
+.login-form input[type="date"] {
+  display: block;
+  appearance: none;
+  -webkit-appearance: none;
 }
 
 .member-picker {
