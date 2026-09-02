@@ -30,7 +30,7 @@ class HealthControllerTest {
         );
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
-        assertThat(response.getBody()).containsEntry("status", "UP");
+        assertThat(response.getBody()).containsExactlyEntriesOf(Map.of("status", "UP"));
     }
 
     @Test
@@ -46,6 +46,6 @@ class HealthControllerTest {
         );
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
-        assertThat(response.getBody()).containsEntry("status", "UP");
+        assertThat(response.getBody()).containsExactlyEntriesOf(Map.of("status", "UP"));
     }
 }
