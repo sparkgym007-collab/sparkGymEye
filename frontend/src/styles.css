@@ -1644,6 +1644,7 @@ th {
 .mobile-members {
   display: grid;
   gap: 10px;
+  overflow: visible;
 }
 
 .mobile-members .collapse-body {
@@ -1651,16 +1652,23 @@ th {
   gap: 10px;
 }
 
+.mobile-members.collapsible-panel.open .collapse-body {
+  max-height: none;
+  overflow: visible;
+}
+
 .mobile-member-card {
-  min-height: 88px;
+  min-height: 104px;
   padding: 11px;
   display: grid;
-  grid-template-columns: 42px minmax(0, 1fr) auto auto;
-  align-items: center;
-  gap: 10px;
+  grid-template-columns: 42px minmax(0, 1fr) minmax(32px, auto) minmax(48px, auto);
+  grid-auto-rows: min-content;
+  align-items: start;
+  gap: 8px 10px;
   border-radius: 8px;
   background: rgba(4, 12, 18, 0.72);
   border: 1px solid rgba(255, 255, 255, 0.06);
+  overflow: hidden;
 }
 
 .avatar {
@@ -1679,11 +1687,17 @@ th {
   color: #ff4563;
   font-size: 13px;
   font-weight: var(--weight-semibold);
+  line-height: 1.25;
+  justify-self: end;
+  white-space: nowrap;
 }
 
 .mobile-member-card > strong {
   font-size: 13px;
   font-weight: var(--weight-semibold);
+  line-height: 1.25;
+  justify-self: end;
+  white-space: nowrap;
 }
 
 .mobile-member-card div:nth-child(2) {
@@ -1711,7 +1725,10 @@ th {
 .mobile-card-actions {
   grid-column: 2 / -1;
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
+  min-width: 0;
+  padding-top: 2px;
 }
 
 .mobile-plan-list {
