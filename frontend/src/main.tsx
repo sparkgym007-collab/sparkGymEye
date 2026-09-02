@@ -406,6 +406,20 @@ function App() {
     setPayments(apiPayments.map((payment) => mapApiPayment(payment, nextMembers)));
   }
 
+  async function loadMemberData() {
+    const apiMember = await apiRequest<ApiMember>("/api/members/me");
+    setMembers([mapApiMember(apiMember)]);
+    setPayments([]);
+  }
+
+  async function loadDataForUser(user: AuthUser) {
+    if (user.role === "MEMBER") {
+      await loadMemberData();
+      return;
+    }
+    await loadAppData();
+  }
+
   async function initializeApp() {
     setAuthLoading(true);
     try {
@@ -415,8 +429,9 @@ function App() {
       });
       await apiRequest<ApiAuthUser>("/api/auth/me")
       .then((user) => {
-        setAuthUser(mapAuthUser(user));
-        return loadAppData();
+        const nextUser = mapAuthUser(user);
+        setAuthUser(nextUser);
+        return loadDataForUser(nextUser);
       })
       .catch(() => {
         setAuthUser(null);
@@ -585,8 +600,25 @@ function App() {
       method: "POST",
       body: JSON.stringify({ phone, password }),
     });
-    setAuthUser(mapAuthUser(user));
-    await loadAppData();
+    const nextUser = mapAuthUser(user);
+    setAuthUser(nextUser);
+    await loadDataForUser(nextUser);
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function memberLogin(phone: string) {
+    if (busyAction) return;
+    setBusyAction("login");
+    try {
+    const user = await apiRequest<ApiAuthUser>("/api/auth/member-login", {
+      method: "POST",
+      body: JSON.stringify({ phone }),
+    });
+    const nextUser = mapAuthUser(user);
+    setAuthUser(nextUser);
+    await loadDataForUser(nextUser);
     } finally {
       setBusyAction(null);
     }
@@ -600,8 +632,9 @@ function App() {
       method: "POST",
       body: JSON.stringify({ fullName, phone, password }),
     });
-    setAuthUser(mapAuthUser(user));
-    await loadAppData();
+    const nextUser = mapAuthUser(user);
+    setAuthUser(nextUser);
+    await loadDataForUser(nextUser);
     } finally {
       setBusyAction(null);
     }
@@ -643,7 +676,19 @@ function App() {
   }
 
   if (!authUser) {
-    return <LoginScreen theme={theme} onToggleTheme={toggleTheme} onLogin={login} onSignup={signup} busy={busyAction === "login"} />;
+    return <LoginScreen theme={theme} onToggleTheme={toggleTheme} onLogin={login} onMemberLogin={memberLogin} onSignup={signup} busy={busyAction === "login"} />;
+  }
+
+  if (authUser.role === "MEMBER") {
+    return (
+      <MemberPortal
+        authUser={authUser}
+        member={members[0] ?? null}
+        theme={theme}
+        onToggleTheme={toggleTheme}
+        onLogout={logout}
+      />
+    );
   }
 
   function exportCsv() {
@@ -1577,17 +1622,23 @@ function MobileMemberRow({
   onPay: (member: Member) => void;
   showOverdue?: boolean;
 }) {
+  const planAmount = plans.find((plan) => plan.name === member.plan)?.amount ?? member.amountDue;
+  const displayAmount = member.amountDue > 0 ? member.amountDue : planAmount;
+  const detailText = showOverdue
+    ? `${member.phone} - ${member.plan} - ${money(displayAmount)}`
+    : `${member.phone} - ${member.plan}`;
+
   return (
-    <div className="mobile-member-card">
+    <div className={`mobile-member-card ${showOverdue ? "overdue-member-card" : ""}`}>
       <div className="avatar">{initials(member.name)}</div>
       <div>
         <strong>{member.name}</strong>
-        <span>{member.phone} · {member.plan}</span>
+        <span>{detailText}</span>
       </div>
       <b className={`member-status ${statusClass(member.status)}`}>
         {showOverdue && member.daysOverdue > 0 ? `${member.daysOverdue}d` : member.status}
       </b>
-      <strong>{money(member.amountDue)}</strong>
+      {!showOverdue && <strong>{money(displayAmount)}</strong>}
       {canManage && (
         <div className="mobile-card-actions">
           <button onClick={() => onPay(member)} aria-label={`Add payment for ${member.name}`}><CreditCard size={15} /></button>
@@ -1942,12 +1993,14 @@ function LoginScreen({
   theme,
   onToggleTheme,
   onLogin,
+  onMemberLogin,
   onSignup,
   busy,
 }: {
   theme: ThemeMode;
   onToggleTheme: () => void;
   onLogin: (phone: string, password: string) => Promise<void>;
+  onMemberLogin: (phone: string) => Promise<void>;
   onSignup: (fullName: string, phone: string, password: string) => Promise<void>;
   busy: boolean;
 }) {
@@ -1957,6 +2010,7 @@ function LoginScreen({
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [signupMode, setSignupMode] = useState(false);
+  const [adminMode, setAdminMode] = useState(false);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -1964,11 +2018,13 @@ function LoginScreen({
     try {
       if (signupMode) {
         await onSignup(fullName.trim(), phone.trim(), password);
-      } else {
+      } else if (adminMode) {
         await onLogin(phone.trim(), password);
+      } else {
+        await onMemberLogin(phone.trim());
       }
     } catch (error) {
-      setError(error instanceof Error ? error.message : "Invalid phone number or password.");
+      setError(error instanceof Error ? error.message : "Could not sign in.");
     }
   }
 
@@ -1978,40 +2034,128 @@ function LoginScreen({
         <ThemeToggle theme={theme} onToggle={onToggleTheme} />
         <div className="brand">
           <h1>SP<span>A</span>RK</h1>
-          <p>Admin Login</p>
+          <p>{adminMode ? "Admin Login" : "Member Login"}</p>
         </div>
         <form onSubmit={submit} className="login-form" aria-busy={busy}>
-          <h2>{signupMode ? "Create Member Account" : "Admin Access"}</h2>
+          <h2>{signupMode ? "Create Member Account" : adminMode ? "Admin Access" : "Member Access"}</h2>
           <fieldset disabled={busy}>
             {signupMode && <label>Name<input required value={fullName} onChange={(event) => setFullName(event.target.value)} placeholder="Your full name" /></label>}
             <label>Phone Number<input value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="+91 98765 43210" /></label>
-            <PasswordField
-              label={signupMode ? "Create Password" : "Admin PIN / Password"}
-              value={password}
-              onChange={setPassword}
-              visible={showPassword}
-              onToggle={() => setShowPassword((value) => !value)}
-            />
+            {(adminMode || signupMode) && (
+              <PasswordField
+                label={signupMode ? "Create Password" : "Admin PIN / Password"}
+                value={password}
+                onChange={setPassword}
+                visible={showPassword}
+                onToggle={() => setShowPassword((value) => !value)}
+              />
+            )}
           </fieldset>
           {error && <p className="form-error">{error}</p>}
           {busy && <SavingGlow message={signupMode ? "Creating your SPARK access" : "Checking secure access"} />}
           <LoadingButton
-            label={signupMode ? "Create Member Account" : "Login"}
+            label={signupMode ? "Create Member Account" : adminMode ? "Login" : "View My Plan"}
             loadingLabel={signupMode ? "Creating account..." : "Signing in..."}
             busy={busy}
           />
           <button type="button" className="text-button" disabled={busy} onClick={() => {
             setSignupMode(!signupMode);
+            setAdminMode(false);
             setError("");
           }}>
             {signupMode ? "Back to admin login" : "Create member account"}
           </button>
+          {!signupMode && (
+            <button type="button" className="text-button" disabled={busy} onClick={() => {
+              setAdminMode(!adminMode);
+              setPassword("");
+              setError("");
+            }}>
+              {adminMode ? "Back to member login" : "Admin login"}
+            </button>
+          )}
           <div className="demo-users">
             <span>Access rules</span>
+            <small>Members use only their registered phone number.</small>
             <small>Admin and trainer accounts use phone plus secure PIN/password.</small>
-            <small>New signups are member accounts with view-only access.</small>
           </div>
         </form>
+      </section>
+    </main>
+  );
+}
+
+function MemberPortal({
+  authUser,
+  member,
+  theme,
+  onToggleTheme,
+  onLogout,
+}: {
+  authUser: AuthUser;
+  member: Member | null;
+  theme: ThemeMode;
+  onToggleTheme: () => void;
+  onLogout: () => void;
+}) {
+  const currentPlan = member ? plans.find((plan) => plan.name === member.plan) : null;
+  const planAmount = currentPlan?.amount ?? member?.amountDue ?? 0;
+
+  return (
+    <main className="member-portal">
+      <section className="member-portal-top">
+        <div className="brand">
+          <h1>SP<span>A</span>RK</h1>
+          <p>Member View</p>
+        </div>
+        <div className="member-portal-actions">
+          <ThemeToggle theme={theme} onToggle={onToggleTheme} />
+          <button type="button" onClick={onLogout}><LogOut size={16} /> Logout</button>
+        </div>
+      </section>
+
+      <section className="panel member-plan-card">
+        <span className="avatar">{initials(member?.name ?? authUser.name)}</span>
+        <div>
+          <p>{member?.rollNo ?? "Member"}</p>
+          <h2>{member?.name ?? authUser.name}</h2>
+          <small>{authUser.phone}</small>
+        </div>
+        {member ? (
+          <div className="member-plan-grid">
+            <div>
+              <span>Current Plan</span>
+              <strong>{member.plan}</strong>
+            </div>
+            <div>
+              <span>Plan Fee</span>
+              <strong>{money(planAmount)}</strong>
+            </div>
+            <div>
+              <span>Paid Up To</span>
+              <strong>{prettyDate(member.paidUpTo)}</strong>
+            </div>
+            <div>
+              <span>Status</span>
+              <strong className={statusClass(member.status)}>{member.status}</strong>
+            </div>
+          </div>
+        ) : (
+          <p className="empty-panel">No member record found for this phone number.</p>
+        )}
+      </section>
+
+      <section className="panel member-plans-panel">
+        <div className="panel-head"><h3>Available Plans</h3><span>{plans.length}</span></div>
+        <div className="mobile-plan-list">
+          {plans.map((plan) => (
+            <div key={plan.name}>
+              <span>{plan.name}</span>
+              <strong>{money(plan.amount)}</strong>
+              <small>{plan.months} month{plan.months > 1 ? "s" : ""}</small>
+            </div>
+          ))}
+        </div>
       </section>
     </main>
   );

@@ -32,6 +32,13 @@ public class AuthController {
         return AuthResponse.from(result.user());
     }
 
+    @PostMapping("/member-login")
+    public AuthResponse memberLogin(@Valid @RequestBody MemberLoginRequest request, HttpServletRequest servletRequest, HttpServletResponse response) {
+        AuthService.LoginResult result = authService.memberLogin(request.phone());
+        addSessionCookie(response, servletRequest, result.token(), 14 * 24 * 60 * 60);
+        return AuthResponse.from(result.user(), Role.MEMBER);
+    }
+
     @PostMapping("/signup")
     public AuthResponse signup(@Valid @RequestBody SignupRequest request, HttpServletRequest servletRequest, HttpServletResponse response) {
         AuthService.LoginResult result = authService.signup(request);
@@ -41,7 +48,8 @@ public class AuthController {
 
     @GetMapping("/me")
     public AuthResponse me(@CookieValue(SESSION_COOKIE) String token) {
-        return AuthResponse.from(authService.requireUserByToken(token));
+        AuthService.SessionIdentity identity = authService.requireSessionByToken(token);
+        return AuthResponse.from(identity.user(), identity.role());
     }
 
     @PutMapping("/me")

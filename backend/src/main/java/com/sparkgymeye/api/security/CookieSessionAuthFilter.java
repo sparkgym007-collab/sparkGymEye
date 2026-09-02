@@ -31,6 +31,7 @@ public class CookieSessionAuthFilter extends OncePerRequestFilter {
         String path = request.getRequestURI();
         return "/api/health".equals(path)
                 || "/api/auth/login".equals(path)
+                || "/api/auth/member-login".equals(path)
                 || "/api/auth/signup".equals(path);
     }
 
@@ -40,8 +41,9 @@ public class CookieSessionAuthFilter extends OncePerRequestFilter {
         String token = readCookie(request);
         if (token != null && SecurityContextHolder.getContext().getAuthentication() == null) {
             try {
-                AppUser user = authService.requireUserByToken(token);
-                List<SimpleGrantedAuthority> authorities = List.of(new SimpleGrantedAuthority("ROLE_" + user.getRole().name()));
+                AuthService.SessionIdentity identity = authService.requireSessionByToken(token);
+                AppUser user = identity.user();
+                List<SimpleGrantedAuthority> authorities = List.of(new SimpleGrantedAuthority("ROLE_" + identity.role().name()));
                 SecurityContextHolder.getContext().setAuthentication(new UsernamePasswordAuthenticationToken(user, null, authorities));
             } catch (BadCredentialsException exception) {
                 SecurityContextHolder.clearContext();

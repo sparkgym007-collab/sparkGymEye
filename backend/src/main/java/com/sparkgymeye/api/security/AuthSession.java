@@ -1,6 +1,8 @@
 package com.sparkgymeye.api.security;
 
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.FetchType;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
@@ -18,6 +20,9 @@ public class AuthSession {
     @ManyToOne(fetch = FetchType.EAGER)
     private AppUser appUser;
 
+    @Enumerated(EnumType.STRING)
+    private Role effectiveRole;
+
     private String tokenHash;
     private Instant expiresAt;
 
@@ -31,6 +36,14 @@ public class AuthSession {
 
     public void setAppUser(AppUser appUser) {
         this.appUser = appUser;
+    }
+
+    public Role getEffectiveRole() {
+        return effectiveRole;
+    }
+
+    public void setEffectiveRole(Role effectiveRole) {
+        this.effectiveRole = effectiveRole;
     }
 
     public String getTokenHash() {

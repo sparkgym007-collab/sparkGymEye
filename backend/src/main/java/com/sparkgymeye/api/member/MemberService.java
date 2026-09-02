@@ -1,5 +1,6 @@
 package com.sparkgymeye.api.member;
 
+import com.sparkgymeye.api.security.AppUser;
 import com.sparkgymeye.api.security.AuthService;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
@@ -25,6 +26,10 @@ public class MemberService {
     public List<Member> findOverdue() {
         refreshStatuses();
         return memberRepository.findByStatus(MemberStatus.OVERDUE);
+    }
+
+    public Member findForUser(AppUser user) {
+        return authService.findMemberByPhoneInput(user.getPhone()).orElseThrow();
     }
 
     public Member create(Member member) {
