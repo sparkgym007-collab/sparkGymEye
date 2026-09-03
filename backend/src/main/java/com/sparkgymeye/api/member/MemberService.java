@@ -1,10 +1,14 @@
 package com.sparkgymeye.api.member;
 
+import com.sparkgymeye.api.payment.Payment;
+import com.sparkgymeye.api.payment.PaymentRepository;
 import com.sparkgymeye.api.security.AppUser;
 import com.sparkgymeye.api.security.AuthService;
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.Objects;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -13,10 +17,12 @@ public class MemberService {
 
     private final MemberRepository memberRepository;
     private final AuthService authService;
+    private final PaymentRepository paymentRepository;
 
-    public MemberService(MemberRepository memberRepository, AuthService authService) {
+    public MemberService(MemberRepository memberRepository, AuthService authService, PaymentRepository paymentRepository) {
         this.memberRepository = memberRepository;
         this.authService = authService;
+        this.paymentRepository = paymentRepository;
     }
 
     public List<Member> findAll() {
@@ -32,15 +38,19 @@ public class MemberService {
         return authService.findMemberByPhoneInput(user.getPhone()).orElseThrow();
     }
 
+    @Transactional
     public Member create(Member member) {
         String normalizedPhone = authService.normalizePhone(member.getPhone());
         if (memberPhoneExists(member.getPhone(), null) || authService.findByPhoneInput(member.getPhone()).isPresent()) {
             throw new IllegalArgumentException("Phone number already exists");
         }
         member.setPhone(normalizedPhone);
-        return memberRepository.save(member);
+        Member savedMember = memberRepository.save(member);
+        appendCollectionSnapshot(savedMember);
+        return savedMember;
     }
 
+    @Transactional
     public Member update(Long id, Member changedMember) {
         Member member = memberRepository.findById(id).orElseThrow();
         String normalizedPhone = authService.normalizePhone(changedMember.getPhone());
@@ -48,6 +58,10 @@ public class MemberService {
                 && (memberPhoneExists(changedMember.getPhone(), member.getId()) || authService.findByPhoneInput(changedMember.getPhone()).isPresent())) {
             throw new IllegalArgumentException("Phone number already exists");
         }
+        boolean paidPlanChanged = !Objects.equals(member.getPlanName(), changedMember.getPlanName())
+                || !Objects.equals(member.getPlanStartDate(), changedMember.getPlanStartDate())
+                || !Objects.equals(member.getDueDate(), changedMember.getDueDate())
+                || member.getMonthlyFee().compareTo(changedMember.getMonthlyFee()) != 0;
         member.setRollNo(changedMember.getRollNo());
         member.setName(changedMember.getName());
         member.setPhone(normalizedPhone);
@@ -58,7 +72,37 @@ public class MemberService {
         member.setMonthlyFee(changedMember.getMonthlyFee());
         member.setAmountDue(changedMember.getAmountDue());
         member.setStatus(changedMember.getStatus());
-        return memberRepository.save(member);
+        Member savedMember = memberRepository.save(member);
+        if (paidPlanChanged) {
+            appendCollectionSnapshot(savedMember);
+        }
+        return savedMember;
+    }
+
+    private void appendCollectionSnapshot(Member member) {
+        BigDecimal amount = member.getMonthlyFee();
+        if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0 || member.getPlanStartDate() == null) {
+            return;
+        }
+        if (paymentRepository.existsByRollNoAndPlanNameAndAmountAndPaidAt(
+                member.getRollNo(),
+                member.getPlanName(),
+                amount,
+                member.getPlanStartDate()
+        )) {
+            return;
+        }
+
+        Payment payment = new Payment();
+        payment.setRollNo(member.getRollNo());
+        payment.setMemberName(member.getName());
+        payment.setPlanName(member.getPlanName());
+        payment.setAmount(amount);
+        payment.setDurationMonths(Math.max(1, (int) ChronoUnit.MONTHS.between(member.getPlanStartDate(), member.getDueDate())));
+        payment.setPaidAt(member.getPlanStartDate());
+        payment.setPaymentMode("UPI");
+        payment.setReceivedBy("ADMIN");
+        paymentRepository.save(payment);
     }
 
     private boolean memberPhoneExists(String phone, Long ignoredMemberId) {

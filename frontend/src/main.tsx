@@ -44,6 +44,7 @@ type Member = {
   name: string;
   phone: string;
   plan: string;
+  planStartDate: string;
   dueDate: string;
   amountDue: number;
   paidUpTo: string;
@@ -200,6 +201,7 @@ function createEmptyForm(): MemberForm {
     name: "",
     phone: "",
     plan: plan.name,
+    planStartDate: paymentDate,
     dueDate: paidUpTo,
     amountDue: plan.amount,
     paidUpTo,
@@ -317,6 +319,7 @@ function mapApiMember(member: ApiMember): Member {
     name: member.name,
     phone: member.phone,
     plan: member.planName,
+    planStartDate: member.planStartDate,
     dueDate: member.dueDate,
     amountDue: Number(member.amountDue),
     paidUpTo: member.dueDate,
@@ -767,10 +770,11 @@ function App() {
       name: member.name,
       phone: member.phone,
       plan: member.plan,
+      planStartDate: member.planStartDate,
       dueDate: member.dueDate,
       amountDue: member.amountDue,
       paidUpTo: member.paidUpTo,
-      paymentDate: currentDateInputValue(),
+      paymentDate: member.planStartDate,
     });
     setDialog("edit");
   }
@@ -2441,13 +2445,13 @@ function MemberEditor({
   function applyPlan(planName: string, paymentDate = form.paymentDate) {
     const plan = plans.find((item) => item.name === planName) ?? plans[0];
     const paidUpTo = plusMonths(paymentDate, plan.months);
-    setForm({ ...form, plan: plan.name, amountDue: plan.amount, paymentDate, paidUpTo, dueDate: paidUpTo });
+    setForm({ ...form, plan: plan.name, planStartDate: paymentDate, amountDue: plan.amount, paymentDate, paidUpTo, dueDate: paidUpTo });
   }
 
   function applyPaymentDate(paymentDate: string) {
     const plan = plans.find((item) => item.name === form.plan) ?? plans[0];
     const paidUpTo = plusMonths(paymentDate, plan.months);
-    setForm({ ...form, paymentDate, paidUpTo, dueDate: paidUpTo });
+    setForm({ ...form, planStartDate: paymentDate, paymentDate, paidUpTo, dueDate: paidUpTo });
   }
 
   return (
