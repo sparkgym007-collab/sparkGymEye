@@ -122,7 +122,7 @@ type MonthlyCollection = {
   planCounts: Record<string, number>;
 };
 
-const API_BASE = import.meta.env.DEV ? (import.meta.env.VITE_API_BASE_URL ?? "http://localhost:9898") : "";
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? (import.meta.env.DEV ? "http://localhost:9898" : "https://sparkgymeye.onrender.com");
 const HEALTH_RETRY_DELAYS_MS = [0, 2000, 4000, 8000, 15000, 15000, 15000, 15000];
 const HEALTH_TIMEOUT_MS = 12000;
 const TRAINER_IMAGE_URL = "https://res.cloudinary.com/wsgsjtrj/image/upload/v1787749514/ChatGPT_Image_Aug_26_2026_06_34_20_PM.png";

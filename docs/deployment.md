@@ -39,9 +39,9 @@ The backend container defaults to `PORT=10000` and binds to `0.0.0.0` so Render 
 
 Do not put backend database variables into the Vercel frontend project. Put them only in the Java backend service environment.
 
-## Frontend on Vercel
+## Frontend on Vercel or Cloudflare Workers
 
-Vercel should host the React frontend only. The frontend should call the deployed backend API URL.
+Vercel or Cloudflare Workers should host the React frontend only. The frontend should call the deployed backend API URL.
 
 Recommended frontend environment variable:
 
@@ -49,7 +49,13 @@ Recommended frontend environment variable:
 VITE_API_BASE_URL=<deployed-backend-url>
 ```
 
-Set this in the Vercel frontend project, then redeploy the frontend. Without it, the production browser falls back to `http://localhost:9898`, which only works on your development machine.
+Set this in the frontend project's build environment, then redeploy the frontend. For Cloudflare, this must be available to the Vite build from the `/frontend` directory, because `VITE_` variables are baked into the browser bundle at build time.
+
+Current production backend:
+
+```text
+VITE_API_BASE_URL=https://sparkgymeye.onrender.com
+```
 
 Do not put Neon credentials in Vercel frontend variables. Browser code is public to users, so database credentials must remain only on the backend server.
 
