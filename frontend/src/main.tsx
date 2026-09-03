@@ -570,7 +570,7 @@ function App() {
   const canManage = authUser?.role === "ADMIN" || authUser?.role === "TRAINER";
 
   function resetSessionAfterAuthError(error: unknown) {
-    if (!(error instanceof ApiRequestError) || (error.status !== 401 && error.status !== 403)) {
+    if (!(error instanceof ApiRequestError) || error.status !== 401) {
       return false;
     }
     setAuthUser(null);
@@ -579,7 +579,7 @@ function App() {
     setDialog(null);
     setSelectedMember(null);
     setMemberToDelete(null);
-    setAppError("Your session was refreshed. Please log in again.");
+    setAppError("Your session expired. Please log in again.");
     return true;
   }
 
@@ -840,8 +840,8 @@ function App() {
         body: JSON.stringify({ phone, password }),
       });
       const nextUser = mapAuthUser(user);
-      setAuthUser(nextUser);
       await loadDataForUser(nextUser);
+      setAuthUser(nextUser);
     } catch (error) {
       resetSessionAfterAuthError(error);
       throw error;
@@ -859,8 +859,8 @@ function App() {
         body: JSON.stringify({ phone }),
       });
       const nextUser = mapAuthUser(user);
-      setAuthUser(nextUser);
       await loadDataForUser(nextUser);
+      setAuthUser(nextUser);
     } catch (error) {
       resetSessionAfterAuthError(error);
       throw error;
@@ -878,8 +878,8 @@ function App() {
         body: JSON.stringify({ fullName, phone, password }),
       });
       const nextUser = mapAuthUser(user);
-      setAuthUser(nextUser);
       await loadDataForUser(nextUser);
+      setAuthUser(nextUser);
     } catch (error) {
       resetSessionAfterAuthError(error);
       throw error;
