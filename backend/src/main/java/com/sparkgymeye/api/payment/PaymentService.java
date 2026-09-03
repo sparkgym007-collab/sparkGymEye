@@ -19,9 +19,22 @@ public class PaymentService {
 
     @Transactional
     public Payment record(Payment payment) {
+        memberRepository.findByRollNo(payment.getRollNo()).ifPresent(member -> preparePaymentSnapshot(member, payment));
         Payment savedPayment = paymentRepository.save(payment);
         memberRepository.findByRollNo(payment.getRollNo()).ifPresent(member -> updateMemberFees(member, payment));
         return savedPayment;
+    }
+
+    private void preparePaymentSnapshot(Member member, Payment payment) {
+        if (payment.getMemberName() == null || payment.getMemberName().isBlank()) {
+            payment.setMemberName(member.getName());
+        }
+        if (payment.getPlanName() == null || payment.getPlanName().isBlank()) {
+            payment.setPlanName(member.getPlanName());
+        }
+        if (payment.getPaymentMode() == null || payment.getPaymentMode().isBlank()) {
+            payment.setPaymentMode("UPI");
+        }
     }
 
     private void updateMemberFees(Member member, Payment payment) {

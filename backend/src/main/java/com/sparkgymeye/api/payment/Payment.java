@@ -19,11 +19,15 @@ public class Payment {
     @NotBlank
     private String rollNo;
 
+    private String memberName;
+    private String planName;
+
     @NotNull
     private BigDecimal amount;
 
     private int durationMonths = 1;
     private LocalDate paidAt = LocalDate.now();
+    private String paymentMode = "UPI";
     private String receivedBy = "ADMIN";
 
     public Long getId() {
@@ -36,6 +40,22 @@ public class Payment {
 
     public void setRollNo(String rollNo) {
         this.rollNo = rollNo;
+    }
+
+    public String getMemberName() {
+        return memberName;
+    }
+
+    public void setMemberName(String memberName) {
+        this.memberName = memberName;
+    }
+
+    public String getPlanName() {
+        return planName;
+    }
+
+    public void setPlanName(String planName) {
+        this.planName = planName;
     }
 
     public BigDecimal getAmount() {
@@ -60,6 +80,14 @@ public class Payment {
 
     public void setPaidAt(LocalDate paidAt) {
         this.paidAt = paidAt;
+    }
+
+    public String getPaymentMode() {
+        return paymentMode;
+    }
+
+    public void setPaymentMode(String paymentMode) {
+        this.paymentMode = paymentMode;
     }
 
     public String getReceivedBy() {

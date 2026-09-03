@@ -1,5 +1,6 @@
 import React, { FormEvent, useEffect, useMemo, useState } from "react";
 import ReactDOM from "react-dom/client";
+import type { jsPDF as JsPDFDocument } from "jspdf";
 import {
   Bell,
   CalendarClock,
@@ -20,6 +21,7 @@ import {
   ReceiptText,
   Search,
   Settings,
+  Share2,
   ShieldAlert,
   Moon,
   Sun,
@@ -69,7 +71,7 @@ type AuthUser = {
   role: AuthRole;
 };
 
-type MobileView = "dashboard" | "members" | "fees" | "overdue";
+type MobileView = "dashboard" | "members" | "fees" | "collection" | "overdue";
 type ThemeMode = "dark" | "light";
 type StartupStatus = "checking" | "warming" | "unavailable";
 type BusyAction = "member" | "payment" | "profile" | "login" | "delete" | null;
@@ -95,9 +97,12 @@ type ApiMember = {
 type ApiPayment = {
   id: number;
   rollNo: string;
+  memberName?: string;
+  planName?: string;
   amount: number;
   durationMonths: number;
   paidAt: string;
+  paymentMode?: Payment["mode"];
   receivedBy: string;
 };
 
@@ -106,6 +111,15 @@ type ApiAuthUser = {
   fullName: string;
   phone: string;
   role: AuthRole;
+};
+
+type MonthlyCollection = {
+  monthIndex: number;
+  label: string;
+  total: number;
+  paymentCount: number;
+  memberCount: number;
+  planCounts: Record<string, number>;
 };
 
 const API_BASE = import.meta.env.DEV ? (import.meta.env.VITE_API_BASE_URL ?? "http://localhost:9898") : "";
@@ -222,15 +236,14 @@ function mapApiMember(member: ApiMember): Member {
 
 function mapApiPayment(payment: ApiPayment, members: Member[]): Payment {
   const member = members.find((item) => item.rollNo === payment.rollNo);
-  const plan = plans.find((item) => item.months === payment.durationMonths);
   return {
     id: payment.id,
-    memberName: member?.name ?? payment.rollNo,
+    memberName: payment.memberName || member?.name || payment.rollNo,
     rollNo: payment.rollNo,
-    plan: plan?.name ?? `${payment.durationMonths} Month`,
+    plan: payment.planName || planNameFromMonths(payment.durationMonths),
     amount: Number(payment.amount),
     paymentDate: payment.paidAt,
-    mode: "UPI",
+    mode: payment.paymentMode ?? "UPI",
     receipt: `#RCPT-${payment.id}`,
   };
 }
@@ -341,6 +354,141 @@ function plusMonths(date: string, months: number) {
   return next.toISOString().slice(0, 10);
 }
 
+function planNameFromMonths(months: number) {
+  return plans.find((plan) => plan.months === months)?.name ?? `${months} Month${months === 1 ? "" : "s"}`;
+}
+
+function buildYearlyCollection(payments: Payment[], year: number): MonthlyCollection[] {
+  const monthMemberSets = Array.from({ length: 12 }, () => new Set<string>());
+  const months = Array.from({ length: 12 }, (_, monthIndex) => ({
+    monthIndex,
+    label: new Intl.DateTimeFormat("en-IN", { month: "short" }).format(new Date(year, monthIndex, 1)),
+    total: 0,
+    paymentCount: 0,
+    memberCount: 0,
+    planCounts: plans.reduce<Record<string, number>>((counts, plan) => {
+      counts[plan.name] = 0;
+      return counts;
+    }, {}),
+  }));
+
+  payments.forEach((payment) => {
+    const paidAt = new Date(`${payment.paymentDate}T00:00:00`);
+    if (Number.isNaN(paidAt.getTime()) || paidAt.getFullYear() !== year) return;
+    const month = months[paidAt.getMonth()];
+    month.total += payment.amount;
+    month.paymentCount += 1;
+    monthMemberSets[paidAt.getMonth()].add(payment.rollNo);
+    month.planCounts[payment.plan] = (month.planCounts[payment.plan] ?? 0) + 1;
+  });
+
+  return months.map((month, index) => ({
+    ...month,
+    memberCount: monthMemberSets[index].size,
+  }));
+}
+
+function planSummary(planCounts: Record<string, number>) {
+  const summary = Object.entries(planCounts)
+    .filter(([, count]) => count > 0)
+    .map(([plan, count]) => `${plan}: ${count}`)
+    .join(", ");
+  return summary || "No plans selected";
+}
+
+function safeFileName(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+}
+
+function drawPdfTable(
+  doc: JsPDFDocument,
+  headers: string[],
+  rows: string[][],
+  columnWidths: number[],
+  startY: number
+) {
+  let y = startY;
+  const marginX = 14;
+  const rowHeight = 8;
+
+  function pageBreakIfNeeded(nextHeight = rowHeight) {
+    if (y + nextHeight <= 285) return;
+    doc.addPage();
+    y = 18;
+  }
+
+  doc.setFillColor(18, 31, 40);
+  doc.setTextColor(255, 255, 255);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8);
+  let x = marginX;
+  headers.forEach((header, index) => {
+    doc.rect(x, y, columnWidths[index], rowHeight, "F");
+    doc.text(header, x + 2, y + 5.5, { maxWidth: columnWidths[index] - 4 });
+    x += columnWidths[index];
+  });
+  y += rowHeight;
+
+  doc.setFont("helvetica", "normal");
+  doc.setTextColor(30, 38, 42);
+  rows.forEach((row, rowIndex) => {
+    pageBreakIfNeeded();
+    x = marginX;
+    if (rowIndex % 2 === 0) {
+      doc.setFillColor(247, 248, 245);
+      doc.rect(marginX, y, columnWidths.reduce((sum, width) => sum + width, 0), rowHeight, "F");
+    }
+    row.forEach((cell, index) => {
+      doc.text(String(cell), x + 2, y + 5.5, { maxWidth: columnWidths[index] - 4 });
+      x += columnWidths[index];
+    });
+    y += rowHeight;
+  });
+}
+
+async function sharePdf(title: string, summary: string[], headers: string[], rows: string[][], columnWidths: number[]) {
+  const { jsPDF } = await import("jspdf");
+  const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+  const generatedAt = new Intl.DateTimeFormat("en-IN", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date());
+  const fileName = `${safeFileName(title)}.pdf`;
+
+  doc.setTextColor(9, 16, 0);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(18);
+  doc.text("SPARK GymEye", 14, 16);
+  doc.setFontSize(13);
+  doc.text(title, 14, 25);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(9);
+  doc.setTextColor(82, 94, 98);
+  doc.text(`Generated ${generatedAt}`, 14, 32);
+
+  let y = 42;
+  summary.forEach((line) => {
+    doc.text(line, 14, y);
+    y += 6;
+  });
+  drawPdfTable(doc, headers, rows, columnWidths, y + 4);
+
+  const blob = doc.output("blob");
+  const file = new File([blob], fileName, { type: "application/pdf" });
+  if (navigator.canShare?.({ files: [file] })) {
+    await navigator.share({ title, text: title, files: [file] });
+    return;
+  }
+
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  link.target = "_blank";
+  link.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 function App() {
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -360,6 +508,8 @@ function App() {
   const [paymentDate, setPaymentDate] = useState(today.toISOString().slice(0, 10));
   const [paymentPlan, setPaymentPlan] = useState("1 Month");
   const [paymentSearch, setPaymentSearch] = useState("");
+  const [reportYear, setReportYear] = useState(today.getFullYear());
+  const [selectedReportMonth, setSelectedReportMonth] = useState(Math.max(0, today.getMonth() - 1));
   const [appError, setAppError] = useState("");
   const [busyAction, setBusyAction] = useState<BusyAction>(null);
   const [theme, setTheme] = useState<ThemeMode>(getInitialTheme);
@@ -386,7 +536,21 @@ function App() {
     })
     .sort((first, second) => daysUntilDue(first.dueDate) - daysUntilDue(second.dueDate));
   const totalReceivable = members.reduce((sum, member) => sum + member.amountDue, 0);
-  const monthlyCollection = payments.reduce((sum, payment) => sum + payment.amount, 0);
+  const yearlyCollection = useMemo(() => buildYearlyCollection(payments, reportYear), [payments, reportYear]);
+  const currentMonthCollection = useMemo(
+    () => buildYearlyCollection(payments, today.getFullYear())[today.getMonth()],
+    [payments]
+  );
+  const selectedCollection = yearlyCollection[selectedReportMonth] ?? yearlyCollection[0];
+  const reportYears = useMemo(() => {
+    const years = new Set([today.getFullYear(), reportYear]);
+    payments.forEach((payment) => {
+      const paidAt = new Date(`${payment.paymentDate}T00:00:00`);
+      if (!Number.isNaN(paidAt.getTime())) years.add(paidAt.getFullYear());
+    });
+    return Array.from(years).sort((first, second) => second - first);
+  }, [payments, reportYear]);
+  const monthlyCollection = currentMonthCollection.total;
   const overdueAmount = overdueMembers.reduce((sum, member) => sum + member.amountDue, 0);
 
   async function loadMembers() {
@@ -577,9 +741,12 @@ function App() {
         method: "POST",
         body: JSON.stringify({
           rollNo: selectedMember.rollNo,
+          memberName: selectedMember.name,
+          planName: plan.name,
           amount: paymentAmount,
           durationMonths: plan.months,
           paidAt: paymentDate,
+          paymentMode,
           receivedBy: authUser?.role ?? "ADMIN",
         }),
       });
@@ -713,6 +880,73 @@ function App() {
     URL.revokeObjectURL(url);
   }
 
+  async function shareCollectionReport() {
+    try {
+      await sharePdf(
+        `Collection Report ${reportYear}`,
+        [
+          `${selectedCollection.label}: ${money(selectedCollection.total)}`,
+          `${selectedCollection.memberCount} paid members, ${selectedCollection.paymentCount} payments`,
+          `Plans selected: ${planSummary(selectedCollection.planCounts)}`,
+        ],
+        ["Month", "Paid Members", "Payments", "Collection", "Plans Selected"],
+        yearlyCollection.map((month) => [
+          month.label,
+          String(month.memberCount),
+          String(month.paymentCount),
+          money(month.total),
+          planSummary(month.planCounts),
+        ]),
+        [28, 28, 24, 34, 150]
+      );
+    } catch (error) {
+      setAppError(error instanceof Error ? error.message : "Could not share collection report");
+    }
+  }
+
+  async function shareMemberReport() {
+    try {
+      await sharePdf(
+        "Member List Report",
+        [`${filteredMembers.length} members`, `Total receivable: ${money(totalReceivable)}`],
+        ["Name", "Phone", "Plan", "Due Date", "Amount Due", "Paid Up To", "Status"],
+        filteredMembers.map((member) => [
+          member.name,
+          member.phone,
+          member.plan,
+          prettyDate(member.dueDate),
+          money(member.amountDue),
+          prettyDate(member.paidUpTo),
+          member.status,
+        ]),
+        [42, 34, 28, 30, 30, 30, 24]
+      );
+    } catch (error) {
+      setAppError(error instanceof Error ? error.message : "Could not share member list report");
+    }
+  }
+
+  async function shareOverdueReport() {
+    try {
+      await sharePdf(
+        "Overdue Report",
+        [`${overdueMembers.length} overdue members`, `Overdue amount: ${money(overdueAmount)}`],
+        ["Name", "Phone", "Plan", "Due Date", "Amount Due", "Days Overdue"],
+        overdueMembers.map((member) => [
+          member.name,
+          member.phone,
+          member.plan,
+          prettyDate(member.dueDate),
+          money(member.amountDue),
+          String(member.daysOverdue),
+        ]),
+        [48, 36, 30, 32, 32, 28]
+      );
+    } catch (error) {
+      setAppError(error instanceof Error ? error.message : "Could not share overdue report");
+    }
+  }
+
   return (
     <>
       <main className="desktop-shell">
@@ -748,6 +982,18 @@ function App() {
             overdueCount={overdueMembers.length}
             overdueAmount={overdueAmount}
             monthlyCollection={monthlyCollection}
+            monthlyPaymentCount={currentMonthCollection.paymentCount}
+          />
+
+          <CollectionReport
+            yearlyCollection={yearlyCollection}
+            selectedCollection={selectedCollection}
+            reportYear={reportYear}
+            reportYears={reportYears}
+            selectedReportMonth={selectedReportMonth}
+            setReportYear={setReportYear}
+            setSelectedReportMonth={setSelectedReportMonth}
+            onShare={shareCollectionReport}
           />
 
           <section className="summary-grid">
@@ -758,7 +1004,7 @@ function App() {
               onFees={() => document.getElementById("members")?.scrollIntoView({ behavior: "smooth" })}
               onOverdue={() => document.getElementById("overdue")?.scrollIntoView({ behavior: "smooth" })}
             />
-            <OverdueSummary buckets={overdueBuckets} overdueCount={overdueMembers.length} />
+            <OverdueSummary buckets={overdueBuckets} overdueCount={overdueMembers.length} onShare={shareOverdueReport} />
             <ExpiringSoonPanel members={expiringMembers} onEdit={openEdit} canManage={canManage} />
             <RecentPayments payments={payments} />
           </section>
@@ -769,12 +1015,13 @@ function App() {
             onDelete={confirmDelete}
             onPay={openPayment}
             onExport={exportCsv}
+            onShare={shareMemberReport}
             canManage={canManage}
           />
 
           <section className="bottom-grid">
             <ReceivableByPlan members={members} />
-            <CollectionChart collection={monthlyCollection} />
+            <CollectionChart yearlyCollection={yearlyCollection} />
           </section>
         </section>
       </main>
@@ -789,6 +1036,14 @@ function App() {
           totalReceivable={totalReceivable}
           overdueAmount={overdueAmount}
           monthlyCollection={monthlyCollection}
+          currentMonthCollection={currentMonthCollection}
+          yearlyCollection={yearlyCollection}
+          selectedCollection={selectedCollection}
+          reportYear={reportYear}
+          reportYears={reportYears}
+          selectedReportMonth={selectedReportMonth}
+          setReportYear={setReportYear}
+          setSelectedReportMonth={setSelectedReportMonth}
           overdueBuckets={overdueBuckets}
           onAdd={openAdd}
           onEdit={openEdit}
@@ -805,6 +1060,9 @@ function App() {
           appError={appError}
           theme={theme}
           onToggleTheme={toggleTheme}
+          onShareCollection={shareCollectionReport}
+          onShareMembers={shareMemberReport}
+          onShareOverdue={shareOverdueReport}
         />
       </main>
 
@@ -990,19 +1248,21 @@ function Stats({
   overdueCount,
   overdueAmount,
   monthlyCollection,
+  monthlyPaymentCount,
 }: {
   totalMembers: number;
   totalReceivable: number;
   overdueCount: number;
   overdueAmount: number;
   monthlyCollection: number;
+  monthlyPaymentCount: number;
 }) {
   return (
     <section className="stats-grid">
       <StatCard label="Total Members" value={String(totalMembers)} detail="Active members" tone="violet" icon={<Users />} />
       <StatCard label="Total Receivable" value={money(totalReceivable)} detail={`From ${totalMembers} members`} tone="red" icon={<ShieldAlert />} />
       <StatCard label="Overdue Amount" value={money(overdueAmount)} detail={`From ${overdueCount} members`} tone="orange" icon={<IndianRupee />} />
-      <StatCard label="Collection This Month" value={money(monthlyCollection)} detail={`From ${Math.max(1, Math.min(42, totalMembers))} payments`} tone="lime" icon={<WalletCards />} />
+      <StatCard label="Collection This Month" value={money(monthlyCollection)} detail={`From ${monthlyPaymentCount} payments`} tone="lime" icon={<WalletCards />} />
     </section>
   );
 }
@@ -1021,17 +1281,32 @@ function StatCard({ label, value, detail, tone, icon }: { label: string; value: 
   );
 }
 
-function OverdueSummary({ buckets, overdueCount }: { buckets: { label: string; members: Member[]; tone: string }[]; overdueCount: number }) {
+function OverdueSummary({
+  buckets,
+  overdueCount,
+  onShare,
+}: {
+  buckets: { label: string; members: Member[]; tone: string }[];
+  overdueCount: number;
+  onShare?: () => void;
+}) {
   const [open, setOpen] = useState(true);
   const total = Math.max(1, buckets.reduce((sum, bucket) => sum + bucket.members.reduce((part, member) => part + member.amountDue, 0), 0));
   return (
     <article className={`panel overdue-summary collapsible-panel ${open ? "open" : "closed"}`} id="overdue">
       <div className="panel-head">
         <h3>Overdue Summary</h3>
-        <button className="collapse-toggle" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
-          <span>{open ? "Hide" : "Show"}</span>
-          <ChevronRight size={16} />
-        </button>
+        <div className="panel-actions">
+          {onShare && (
+            <button className="share-button" onClick={onShare} aria-label="Share overdue report" title="Share overdue report">
+              <Share2 size={15} />
+            </button>
+          )}
+          <button className="collapse-toggle" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
+            <span>{open ? "Hide" : "Show"}</span>
+            <ChevronRight size={16} />
+          </button>
+        </div>
       </div>
       <div className="collapse-body donut-row">
         <div className="donut"><strong>{overdueCount}</strong><span>Overdue Members</span></div>
@@ -1073,6 +1348,100 @@ function RecentPayments({ payments }: { payments: Payment[] }) {
                 <td>{prettyDate(payment.paymentDate)}</td>
                 <td><span className={`mode ${payment.mode.toLowerCase()}`}>{payment.mode}</span></td>
                 <td>{payment.receipt}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </article>
+  );
+}
+
+function CollectionReport({
+  yearlyCollection,
+  selectedCollection,
+  reportYear,
+  reportYears,
+  selectedReportMonth,
+  setReportYear,
+  setSelectedReportMonth,
+  onShare,
+}: {
+  yearlyCollection: MonthlyCollection[];
+  selectedCollection: MonthlyCollection;
+  reportYear: number;
+  reportYears: number[];
+  selectedReportMonth: number;
+  setReportYear: (year: number) => void;
+  setSelectedReportMonth: (month: number) => void;
+  onShare: () => void;
+}) {
+  const yearlyTotal = yearlyCollection.reduce((sum, month) => sum + month.total, 0);
+  const collectionMonths = yearlyCollection.filter((month) => month.paymentCount > 0).length;
+
+  return (
+    <article className="panel collection-report" id="collection-report">
+      <div className="panel-head collection-report-head">
+        <div>
+          <h3>Collection Report</h3>
+          <span>{reportYear} monthly payment data</span>
+        </div>
+        <button className="share-button" type="button" onClick={onShare} aria-label="Share collection report" title="Share collection report">
+          <Share2 size={15} />
+        </button>
+      </div>
+      <div className="report-controls">
+        <div className="report-months" aria-label="Collection month">
+          {yearlyCollection.map((month) => (
+            <button
+              key={month.monthIndex}
+              className={month.monthIndex === selectedReportMonth ? "active" : ""}
+              type="button"
+              onClick={() => setSelectedReportMonth(month.monthIndex)}
+            >
+              {month.label}
+            </button>
+          ))}
+        </div>
+        <label>
+          <CalendarClock size={15} />
+          <select value={reportYear} onChange={(event) => setReportYear(Number(event.target.value))}>
+            {reportYears.map((year) => <option key={year} value={year}>{year}</option>)}
+          </select>
+        </label>
+      </div>
+
+      <div className="collection-snapshot">
+        <div>
+          <span>{selectedCollection.label} Collection</span>
+          <strong>{money(selectedCollection.total)}</strong>
+          <small>{selectedCollection.memberCount} paid members, {selectedCollection.paymentCount} payments</small>
+        </div>
+        <div>
+          <span>Plans Selected</span>
+          <strong>{selectedCollection.paymentCount}</strong>
+          <small>{planSummary(selectedCollection.planCounts)}</small>
+        </div>
+        <div>
+          <span>Year Total</span>
+          <strong>{money(yearlyTotal)}</strong>
+          <small>{collectionMonths} active collection months</small>
+        </div>
+      </div>
+
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Month</th><th>Paid Members</th><th>Payments</th><th>Total Collection</th><th>Plans Selected</th></tr>
+          </thead>
+          <tbody>
+            {yearlyCollection.map((month) => (
+              <tr key={month.monthIndex} className={month.monthIndex === selectedReportMonth ? "selected-row" : ""}>
+                <td>{month.label}</td>
+                <td>{month.memberCount}</td>
+                <td>{month.paymentCount}</td>
+                <td>{money(month.total)}</td>
+                <td>{planSummary(month.planCounts)}</td>
               </tr>
             ))}
           </tbody>
@@ -1139,6 +1508,7 @@ function MembersTable({
   onDelete,
   onPay,
   onExport,
+  onShare,
   canManage,
 }: {
   members: Member[];
@@ -1146,13 +1516,19 @@ function MembersTable({
   onDelete: (member: Member) => void;
   onPay: (member: Member) => void;
   onExport: () => void;
+  onShare: () => void;
   canManage: boolean;
 }) {
   return (
     <article className="panel members-table" id="members">
       <div className="panel-head">
         <h3>Members & Fees</h3>
-        <button className="ghost" onClick={onExport}><Download size={16} /> Export Excel</button>
+        <div className="panel-actions">
+          <button className="share-button" onClick={onShare} aria-label="Share member list report" title="Share member list report">
+            <Share2 size={15} />
+          </button>
+          <button className="ghost" onClick={onExport}><Download size={16} /> Export Excel</button>
+        </div>
       </div>
       <div className="table-wrap">
         <table>
@@ -1210,15 +1586,22 @@ function ReceivableByPlan({ members }: { members: Member[] }) {
   );
 }
 
-function CollectionChart({ collection }: { collection: number }) {
+function CollectionChart({ yearlyCollection }: { yearlyCollection: MonthlyCollection[] }) {
+  const maxCollection = Math.max(1, ...yearlyCollection.map((month) => month.total));
+  const yearlyTotal = yearlyCollection.reduce((sum, month) => sum + month.total, 0);
+
   return (
     <article className="panel collection-panel">
-      <div className="panel-head"><h3>Fee Collection Overview</h3><button className="ghost">This Month</button></div>
-      <strong>{money(collection)}</strong>
+      <div className="panel-head"><h3>Fee Collection Overview</h3><span>Yearly</span></div>
+      <strong>{money(yearlyTotal)}</strong>
       <span>Total Collection</span>
       <div className="chart">
-        {[8, 18, 24, 18, 47, 39, 56, 52, 75, 98].map((point, index) => (
-          <i key={index} style={{ height: `${point}%` }} />
+        {yearlyCollection.map((month) => (
+          <i
+            key={month.monthIndex}
+            title={`${month.label}: ${money(month.total)}`}
+            style={{ height: `${Math.max(4, (month.total / maxCollection) * 100)}%` }}
+          />
         ))}
       </div>
     </article>
@@ -1234,6 +1617,14 @@ function MobileDashboard({
   totalReceivable,
   overdueAmount,
   monthlyCollection,
+  currentMonthCollection,
+  yearlyCollection,
+  selectedCollection,
+  reportYear,
+  reportYears,
+  selectedReportMonth,
+  setReportYear,
+  setSelectedReportMonth,
   overdueBuckets,
   onAdd,
   onEdit,
@@ -1250,6 +1641,9 @@ function MobileDashboard({
   appError,
   theme,
   onToggleTheme,
+  onShareCollection,
+  onShareMembers,
+  onShareOverdue,
 }: {
   query: string;
   setQuery: (value: string) => void;
@@ -1259,6 +1653,14 @@ function MobileDashboard({
   totalReceivable: number;
   overdueAmount: number;
   monthlyCollection: number;
+  currentMonthCollection: MonthlyCollection;
+  yearlyCollection: MonthlyCollection[];
+  selectedCollection: MonthlyCollection;
+  reportYear: number;
+  reportYears: number[];
+  selectedReportMonth: number;
+  setReportYear: (year: number) => void;
+  setSelectedReportMonth: (month: number) => void;
   overdueBuckets: { label: string; members: Member[]; tone: string }[];
   onAdd: () => void;
   onEdit: (member: Member) => void;
@@ -1275,6 +1677,9 @@ function MobileDashboard({
   appError: string;
   theme: ThemeMode;
   onToggleTheme: () => void;
+  onShareCollection: () => void;
+  onShareMembers: () => void;
+  onShareOverdue: () => void;
 }) {
   function navigate(nextView: MobileView) {
     setView(nextView);
@@ -1347,7 +1752,7 @@ function MobileDashboard({
             <MiniStat label="Members" value={String(members.length)} icon={<Users />} tone="violet" />
             <MiniStat label="Overdue" value={String(overdueMembers.length)} icon={<ShieldAlert />} tone="red" />
             <MiniStat label="Overdue Amount" value={money(overdueAmount)} icon={<IndianRupee />} tone="orange" />
-            <MiniStat label="Collection" value={money(monthlyCollection)} icon={<WalletCards />} tone="lime" />
+            <MiniStat label="Expiring" value={String(expiringMembers.length)} icon={<CalendarClock />} tone="lime" />
           </section>
 
           <QuickActions
@@ -1366,6 +1771,7 @@ function MobileDashboard({
             onEdit={onEdit}
             onDelete={onDelete}
             onPay={onPay}
+            onShare={onShareOverdue}
           />
 
           <ExpiringSoonPanel members={expiringMembers} onEdit={onEdit} canManage={canManage} />
@@ -1380,14 +1786,29 @@ function MobileDashboard({
           onEdit={onEdit}
           onDelete={onDelete}
           onPay={onPay}
+          onShare={onShareMembers}
         />
       )}
 
       {view === "fees" && (
         <MobileFeesScreen
           monthlyCollection={monthlyCollection}
+          currentMonthCollection={currentMonthCollection}
           canManage={canManage}
           onPay={onPay}
+        />
+      )}
+
+      {view === "collection" && (
+        <MobileCollectionScreen
+          yearlyCollection={yearlyCollection}
+          selectedCollection={selectedCollection}
+          reportYear={reportYear}
+          reportYears={reportYears}
+          selectedReportMonth={selectedReportMonth}
+          setReportYear={setReportYear}
+          setSelectedReportMonth={setSelectedReportMonth}
+          onShare={onShareCollection}
         />
       )}
 
@@ -1400,6 +1821,7 @@ function MobileDashboard({
           onEdit={onEdit}
           onDelete={onDelete}
           onPay={onPay}
+          onShare={onShareOverdue}
         />
       )}
 
@@ -1420,12 +1842,14 @@ function OverdueMembersPanel({
   onEdit,
   onDelete,
   onPay,
+  onShare,
 }: {
   overdueMembers: Member[];
   canManage: boolean;
   onEdit: (member: Member) => void;
   onDelete: (member: Member) => void;
   onPay: (member: Member) => void;
+  onShare?: () => void;
 }) {
   const [open, setOpen] = useState(true);
 
@@ -1433,10 +1857,17 @@ function OverdueMembersPanel({
     <article className={`panel mobile-members collapsible-panel ${open ? "open" : "closed"}`}>
       <div className="panel-head">
         <h3>Overdue Members</h3>
-        <button className="collapse-toggle" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
-          <span>{overdueMembers.length}</span>
-          <ChevronRight size={16} />
-        </button>
+        <div className="panel-actions">
+          {onShare && (
+            <button className="share-button" onClick={onShare} aria-label="Share overdue report" title="Share overdue report">
+              <Share2 size={15} />
+            </button>
+          )}
+          <button className="collapse-toggle" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
+            <span>{overdueMembers.length}</span>
+            <ChevronRight size={16} />
+          </button>
+        </div>
       </div>
       <div className="collapse-body">
         {overdueMembers.length === 0 ? (
@@ -1466,6 +1897,7 @@ function MobileMembersScreen({
   onEdit,
   onDelete,
   onPay,
+  onShare,
 }: {
   members: Member[];
   canManage: boolean;
@@ -1473,6 +1905,7 @@ function MobileMembersScreen({
   onEdit: (member: Member) => void;
   onDelete: (member: Member) => void;
   onPay: (member: Member) => void;
+  onShare: () => void;
 }) {
   return (
     <section className="mobile-screen">
@@ -1485,7 +1918,15 @@ function MobileMembersScreen({
       </div>
 
       <article className="panel mobile-members">
-        <div className="panel-head"><h3>All Members</h3><span>{members.length}</span></div>
+        <div className="panel-head">
+          <h3>All Members</h3>
+          <div className="panel-actions">
+            <button className="share-button" onClick={onShare} aria-label="Share member list report" title="Share member list report">
+              <Share2 size={15} />
+            </button>
+            <span>{members.length}</span>
+          </div>
+        </div>
         {members.map((member) => (
           <MobileMemberRow
             key={member.id}
@@ -1529,10 +1970,12 @@ function QuickActions({
 
 function MobileFeesScreen({
   monthlyCollection,
+  currentMonthCollection,
   canManage,
   onPay,
 }: {
   monthlyCollection: number;
+  currentMonthCollection: MonthlyCollection;
   canManage: boolean;
   onPay: (member?: Member) => void;
 }) {
@@ -1547,7 +1990,7 @@ function MobileFeesScreen({
 
       <section className="mobile-hero">
         <WalletCards size={32} />
-        <div><span>This Month</span><strong>{money(monthlyCollection)}</strong><p>Total fee collection</p></div>
+        <div><span>This Month</span><strong>{money(monthlyCollection)}</strong><p>{currentMonthCollection.paymentCount} payments recorded</p></div>
       </section>
 
       {canManage && <button className="mobile-primary" onClick={() => onPay()}><Plus size={19} /> Add Payment</button>}
@@ -1568,6 +2011,48 @@ function MobileFeesScreen({
   );
 }
 
+function MobileCollectionScreen({
+  yearlyCollection,
+  selectedCollection,
+  reportYear,
+  reportYears,
+  selectedReportMonth,
+  setReportYear,
+  setSelectedReportMonth,
+  onShare,
+}: {
+  yearlyCollection: MonthlyCollection[];
+  selectedCollection: MonthlyCollection;
+  reportYear: number;
+  reportYears: number[];
+  selectedReportMonth: number;
+  setReportYear: (year: number) => void;
+  setSelectedReportMonth: (month: number) => void;
+  onShare: () => void;
+}) {
+  return (
+    <section className="mobile-screen">
+      <div className="mobile-view-head">
+        <div>
+          <h2>Collection</h2>
+          <p>Month-wise income report</p>
+        </div>
+      </div>
+
+      <CollectionReport
+        yearlyCollection={yearlyCollection}
+        selectedCollection={selectedCollection}
+        reportYear={reportYear}
+        reportYears={reportYears}
+        selectedReportMonth={selectedReportMonth}
+        setReportYear={setReportYear}
+        setSelectedReportMonth={setSelectedReportMonth}
+        onShare={onShare}
+      />
+    </section>
+  );
+}
+
 function MobileOverdueScreen({
   overdueMembers,
   overdueBuckets,
@@ -1576,6 +2061,7 @@ function MobileOverdueScreen({
   onEdit,
   onDelete,
   onPay,
+  onShare,
 }: {
   overdueMembers: Member[];
   overdueBuckets: { label: string; members: Member[]; tone: string }[];
@@ -1584,6 +2070,7 @@ function MobileOverdueScreen({
   onEdit: (member: Member) => void;
   onDelete: (member: Member) => void;
   onPay: (member: Member) => void;
+  onShare: () => void;
 }) {
   return (
     <section className="mobile-screen">
@@ -1594,7 +2081,7 @@ function MobileOverdueScreen({
         </div>
       </div>
 
-      <OverdueSummary buckets={overdueBuckets} overdueCount={overdueMembers.length} />
+      <OverdueSummary buckets={overdueBuckets} overdueCount={overdueMembers.length} onShare={onShare} />
 
       <OverdueMembersPanel
         overdueMembers={overdueMembers}
@@ -1602,6 +2089,7 @@ function MobileOverdueScreen({
         onEdit={onEdit}
         onDelete={onDelete}
         onPay={onPay}
+        onShare={onShare}
       />
     </section>
   );
@@ -1704,7 +2192,8 @@ function MobileDrawer({
           <button className={view === "overdue" ? "active" : ""} onClick={() => run(() => onNavigate("overdue"))}><ShieldAlert size={24} /> Overdue</button>
 
           <span>Reports & Automation</span>
-          <button onClick={() => run(() => onNavigate("overdue"))}><CalendarClock size={24} /> Reports</button>
+          <button className={view === "collection" ? "active" : ""} onClick={() => run(() => onNavigate("collection"))}><CalendarClock size={24} /> Collection</button>
+          <button onClick={() => run(() => onNavigate("overdue"))}><FileSpreadsheet size={24} /> Reports</button>
           <button onClick={() => run(() => onNavigate("dashboard"))}><Settings size={24} /> Automation</button>
 
           <span>Settings</span>
@@ -1949,7 +2438,6 @@ function SavingGlow({ message }: { message: string }) {
 
 function StartupScreen({
   status,
-  attempt,
   onRetry,
 }: {
   status: StartupStatus;
@@ -1957,12 +2445,12 @@ function StartupScreen({
   onRetry: () => void;
 }) {
   const isUnavailable = status === "unavailable";
-  const title = isUnavailable ? "SPARK is taking a little longer to start." : "Waking up SPARK...";
-  const message = status === "checking"
-    ? "Checking the control room."
-    : isUnavailable
-      ? "The backend did not answer yet. Try again in a moment."
-      : "This may take a moment after a quiet period.";
+  const title = isUnavailable ? "Almost there" : "SPARK GymEye";
+  const message = isUnavailable
+    ? "A quick refresh should bring everything back."
+    : status === "checking"
+      ? "Setting up your gym floor."
+      : "Loading your members, fees, and reports.";
 
   return (
     <main className="login-shell startup-shell">
@@ -1973,16 +2461,20 @@ function StartupScreen({
         </div>
         <div className="startup-status">
           {!isUnavailable && (
-            <div className="startup-pulse" aria-hidden="true">
+            <div className="spark-loader" aria-hidden="true">
               <span />
-              <span />
-              <span />
+              <i />
+              <b />
             </div>
           )}
           <h2>{title}</h2>
           <p>{message}</p>
-          <small>Connection attempt {attempt}</small>
-          {isUnavailable && <button className="primary" type="button" onClick={onRetry}>Try Again</button>}
+          {!isUnavailable && (
+            <div className="startup-charge" aria-hidden="true">
+              <span />
+            </div>
+          )}
+          {isUnavailable && <button className="primary" type="button" onClick={onRetry}>Refresh</button>}
         </div>
       </section>
     </main>
