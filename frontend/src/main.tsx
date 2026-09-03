@@ -122,21 +122,23 @@ type MonthlyCollection = {
   planCounts: Record<string, number>;
 };
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? (import.meta.env.DEV ? "http://localhost:9898" : "https://sparkgymeye.onrender.com");
+class ApiRequestError extends Error {
+  status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ApiRequestError";
+    this.status = status;
+  }
+}
+
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? (import.meta.env.DEV ? "http://localhost:9898" : "");
 const HEALTH_RETRY_DELAYS_MS = [0, 2000, 4000, 8000, 15000, 15000, 15000, 15000];
 const HEALTH_TIMEOUT_MS = 12000;
 const TRAINER_IMAGE_URL = "https://res.cloudinary.com/wsgsjtrj/image/upload/v1787749514/ChatGPT_Image_Aug_26_2026_06_34_20_PM.png";
+const CLIENT_STATE_VERSION = "2026-09-03-db-only-v1";
+const LEGACY_STORAGE_PREFIXES = ["spark-", "sparkgymeye"];
 const today = new Date();
-
-const emptyForm: MemberForm = {
-  name: "",
-  phone: "",
-  plan: "1 Month",
-  dueDate: plusMonths("2026-08-26", 1),
-  amountDue: 600,
-  paidUpTo: plusMonths("2026-08-26", 1),
-  paymentDate: "2026-08-26",
-};
 
 function money(value: number) {
   return new Intl.NumberFormat("en-IN", {
@@ -176,13 +178,61 @@ function normalizedPhoneKey(phone: string) {
   return compact;
 }
 
+function currentDateInputValue() {
+  return formatDateInputValue(new Date());
+}
+
+function formatDateInputValue(date: Date) {
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${date.getFullYear()}-${month}-${day}`;
+}
+
+function createEmptyForm(): MemberForm {
+  const paymentDate = currentDateInputValue();
+  const plan = plans[0];
+  const paidUpTo = plusMonths(paymentDate, plan.months);
+  return {
+    name: "",
+    phone: "",
+    plan: plan.name,
+    dueDate: paidUpTo,
+    amountDue: plan.amount,
+    paidUpTo,
+    paymentDate,
+  };
+}
+
+function clearLegacyClientData() {
+  const currentVersion = window.localStorage.getItem("spark-client-state-version");
+  if (currentVersion === CLIENT_STATE_VERSION) return;
+
+  const removeLegacyKeys = (storage: Storage) => {
+    const keys = Array.from({ length: storage.length }, (_, index) => storage.key(index))
+      .filter((key): key is string => Boolean(key));
+    keys.forEach((key) => {
+      if (key === "spark-theme") return;
+      if (key === "spark-client-state-version") return;
+      if (LEGACY_STORAGE_PREFIXES.some((prefix) => key.toLowerCase().startsWith(prefix))) {
+        storage.removeItem(key);
+      }
+    });
+  };
+
+  removeLegacyKeys(window.localStorage);
+  removeLegacyKeys(window.sessionStorage);
+  window.localStorage.setItem("spark-client-state-version", CLIENT_STATE_VERSION);
+}
+
 function getInitialTheme(): ThemeMode {
   return "dark";
 }
 
 function getStatus(dueDate: string, amountDue: number): Pick<Member, "status" | "daysOverdue"> {
   const due = new Date(`${dueDate}T00:00:00`);
-  const days = Math.ceil((today.getTime() - due.getTime()) / 86400000);
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const days = Math.ceil((startOfToday.getTime() - due.getTime()) / 86400000);
   if (amountDue > 0 && days > 0) {
     return { status: "Overdue", daysOverdue: days };
   }
@@ -274,6 +324,7 @@ async function fetchWithTimeout(path: string, timeoutMs: number): Promise<Respon
   const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await fetch(`${API_BASE}${path}`, {
+      cache: "no-store",
       credentials: "omit",
       signal: controller.signal,
     });
@@ -312,10 +363,13 @@ async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
   let response: Response;
   try {
     response = await fetch(`${API_BASE}${path}`, {
+      cache: "no-store",
       credentials: "include",
       ...init,
       headers: {
         "Content-Type": "application/json",
+        "Cache-Control": "no-store",
+        "Pragma": "no-cache",
         ...init.headers,
       },
     });
@@ -331,7 +385,7 @@ async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
     } catch {
       // Keep the raw response text when the server did not return JSON.
     }
-    throw new Error(errorMessage || `Request failed with status ${response.status}`);
+    throw new ApiRequestError(errorMessage || `Request failed with status ${response.status}`, response.status);
   }
   if (response.status === 204) {
     return undefined as T;
@@ -351,7 +405,7 @@ function nextRollNo(members: Member[]) {
 function plusMonths(date: string, months: number) {
   const next = new Date(`${date}T00:00:00`);
   next.setMonth(next.getMonth() + months);
-  return next.toISOString().slice(0, 10);
+  return formatDateInputValue(next);
 }
 
 function planNameFromMonths(months: number) {
@@ -502,10 +556,10 @@ function App() {
   const [dialog, setDialog] = useState<"add" | "edit" | "payment" | "profile" | null>(null);
   const [selectedMember, setSelectedMember] = useState<Member | null>(null);
   const [memberToDelete, setMemberToDelete] = useState<Member | null>(null);
-  const [form, setForm] = useState<MemberForm>(emptyForm);
+  const [form, setForm] = useState<MemberForm>(() => createEmptyForm());
   const [paymentAmount, setPaymentAmount] = useState(600);
   const [paymentMode, setPaymentMode] = useState<Payment["mode"]>("UPI");
-  const [paymentDate, setPaymentDate] = useState(today.toISOString().slice(0, 10));
+  const [paymentDate, setPaymentDate] = useState(() => currentDateInputValue());
   const [paymentPlan, setPaymentPlan] = useState("1 Month");
   const [paymentSearch, setPaymentSearch] = useState("");
   const [reportYear, setReportYear] = useState(today.getFullYear());
@@ -514,6 +568,20 @@ function App() {
   const [busyAction, setBusyAction] = useState<BusyAction>(null);
   const [theme, setTheme] = useState<ThemeMode>(getInitialTheme);
   const canManage = authUser?.role === "ADMIN" || authUser?.role === "TRAINER";
+
+  function resetSessionAfterAuthError(error: unknown) {
+    if (!(error instanceof ApiRequestError) || (error.status !== 401 && error.status !== 403)) {
+      return false;
+    }
+    setAuthUser(null);
+    setMembers([]);
+    setPayments([]);
+    setDialog(null);
+    setSelectedMember(null);
+    setMemberToDelete(null);
+    setAppError("Your session was refreshed. Please log in again.");
+    return true;
+  }
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -587,6 +655,7 @@ function App() {
   async function initializeApp() {
     setAuthLoading(true);
     try {
+      clearLegacyClientData();
       await waitForBackendReady((attempt, status) => {
         setStartupAttempt(attempt);
         setStartupStatus(status);
@@ -634,7 +703,7 @@ function App() {
     if (!canManage) return;
     setAppError("");
     setSelectedMember(null);
-    setForm(emptyForm);
+    setForm(createEmptyForm());
     setDialog("add");
   }
 
@@ -649,7 +718,7 @@ function App() {
       dueDate: member.dueDate,
       amountDue: member.amountDue,
       paidUpTo: member.paidUpTo,
-      paymentDate: today.toISOString().slice(0, 10),
+      paymentDate: currentDateInputValue(),
     });
     setDialog("edit");
   }
@@ -661,7 +730,7 @@ function App() {
     const plan = plans.find((item) => item.name === target?.plan) ?? plans[0];
     setPaymentAmount(target?.amountDue || plan.amount);
     setPaymentMode("UPI");
-    setPaymentDate(today.toISOString().slice(0, 10));
+    setPaymentDate(currentDateInputValue());
     setPaymentPlan(target?.plan ?? plans[0].name);
     setPaymentSearch(target ? `${target.name} ${target.phone}` : "");
     setDialog("payment");
@@ -706,6 +775,7 @@ function App() {
       await loadAppData();
       setDialog(null);
     } catch (error) {
+      if (resetSessionAfterAuthError(error)) return;
       setAppError(error instanceof Error ? error.message : "Could not save member");
     } finally {
       setBusyAction(null);
@@ -721,6 +791,7 @@ function App() {
       await apiRequest<void>(`/api/members/${memberId}`, { method: "DELETE" });
       await loadAppData();
     } catch (error) {
+      if (resetSessionAfterAuthError(error)) return;
       setAppError(error instanceof Error ? error.message : "Could not delete member");
     } finally {
       setBusyAction(null);
@@ -753,6 +824,7 @@ function App() {
       await loadAppData();
       setDialog(null);
     } catch (error) {
+      if (resetSessionAfterAuthError(error)) return;
       setAppError(error instanceof Error ? error.message : "Could not record payment");
     } finally {
       setBusyAction(null);
@@ -763,13 +835,16 @@ function App() {
     if (busyAction) return;
     setBusyAction("login");
     try {
-    const user = await apiRequest<ApiAuthUser>("/api/auth/login", {
-      method: "POST",
-      body: JSON.stringify({ phone, password }),
-    });
-    const nextUser = mapAuthUser(user);
-    setAuthUser(nextUser);
-    await loadDataForUser(nextUser);
+      const user = await apiRequest<ApiAuthUser>("/api/auth/login", {
+        method: "POST",
+        body: JSON.stringify({ phone, password }),
+      });
+      const nextUser = mapAuthUser(user);
+      setAuthUser(nextUser);
+      await loadDataForUser(nextUser);
+    } catch (error) {
+      resetSessionAfterAuthError(error);
+      throw error;
     } finally {
       setBusyAction(null);
     }
@@ -779,13 +854,16 @@ function App() {
     if (busyAction) return;
     setBusyAction("login");
     try {
-    const user = await apiRequest<ApiAuthUser>("/api/auth/member-login", {
-      method: "POST",
-      body: JSON.stringify({ phone }),
-    });
-    const nextUser = mapAuthUser(user);
-    setAuthUser(nextUser);
-    await loadDataForUser(nextUser);
+      const user = await apiRequest<ApiAuthUser>("/api/auth/member-login", {
+        method: "POST",
+        body: JSON.stringify({ phone }),
+      });
+      const nextUser = mapAuthUser(user);
+      setAuthUser(nextUser);
+      await loadDataForUser(nextUser);
+    } catch (error) {
+      resetSessionAfterAuthError(error);
+      throw error;
     } finally {
       setBusyAction(null);
     }
@@ -795,13 +873,16 @@ function App() {
     if (busyAction) return;
     setBusyAction("login");
     try {
-    const user = await apiRequest<ApiAuthUser>("/api/auth/signup", {
-      method: "POST",
-      body: JSON.stringify({ fullName, phone, password }),
-    });
-    const nextUser = mapAuthUser(user);
-    setAuthUser(nextUser);
-    await loadDataForUser(nextUser);
+      const user = await apiRequest<ApiAuthUser>("/api/auth/signup", {
+        method: "POST",
+        body: JSON.stringify({ fullName, phone, password }),
+      });
+      const nextUser = mapAuthUser(user);
+      setAuthUser(nextUser);
+      await loadDataForUser(nextUser);
+    } catch (error) {
+      resetSessionAfterAuthError(error);
+      throw error;
     } finally {
       setBusyAction(null);
     }
@@ -811,11 +892,14 @@ function App() {
     if (busyAction) return;
     setBusyAction("profile");
     try {
-    const user = await apiRequest<ApiAuthUser>("/api/auth/me", {
-      method: "PUT",
-      body: JSON.stringify({ fullName, phone }),
-    });
-    setAuthUser(mapAuthUser(user));
+      const user = await apiRequest<ApiAuthUser>("/api/auth/me", {
+        method: "PUT",
+        body: JSON.stringify({ fullName, phone }),
+      });
+      setAuthUser(mapAuthUser(user));
+    } catch (error) {
+      if (resetSessionAfterAuthError(error)) return;
+      throw error;
     } finally {
       setBusyAction(null);
     }
