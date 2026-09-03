@@ -57,6 +57,7 @@ type Payment = {
   rollNo: string;
   plan: string;
   amount: number;
+  durationMonths: number;
   paymentDate: string;
   mode: "UPI" | "Cash" | "Card";
   receipt: string;
@@ -332,6 +333,7 @@ function mapApiPayment(payment: ApiPayment, members: Member[]): Payment {
     rollNo: payment.rollNo,
     plan: payment.planName || planNameFromMonths(payment.durationMonths),
     amount: Number(payment.amount),
+    durationMonths: payment.durationMonths,
     paymentDate: payment.paidAt,
     mode: payment.paymentMode ?? "UPI",
     receipt: `#RCPT-${payment.id}`,
@@ -597,6 +599,7 @@ function App() {
   const [query, setQuery] = useState("");
   const [dialog, setDialog] = useState<"add" | "edit" | "payment" | "profile" | null>(null);
   const [selectedMember, setSelectedMember] = useState<Member | null>(null);
+  const [selectedDetailMember, setSelectedDetailMember] = useState<Member | null>(null);
   const [memberToDelete, setMemberToDelete] = useState<Member | null>(null);
   const [form, setForm] = useState<MemberForm>(() => createEmptyForm());
   const [paymentAmount, setPaymentAmount] = useState(600);
@@ -620,6 +623,7 @@ function App() {
     setPayments([]);
     setDialog(null);
     setSelectedMember(null);
+    setSelectedDetailMember(null);
     setMemberToDelete(null);
     clearAuthToken();
     setAppError("Your session expired. Please log in again.");
@@ -663,6 +667,9 @@ function App() {
   }, [payments, reportYear]);
   const monthlyCollection = currentMonthCollection.total;
   const overdueAmount = overdueMembers.reduce((sum, member) => sum + member.amountDue, 0);
+  const selectedDetailPayments = selectedDetailMember
+    ? payments.filter((payment) => payment.rollNo === selectedDetailMember.rollNo)
+    : [];
 
   async function loadMembers() {
     const apiMembers = await apiRequest<ApiMember[]>("/api/members");
@@ -683,8 +690,10 @@ function App() {
 
   async function loadMemberData() {
     const apiMember = await apiRequest<ApiMember>("/api/members/me");
-    setMembers([mapApiMember(apiMember)]);
-    setPayments([]);
+    const nextMember = mapApiMember(apiMember);
+    const apiPayments = await apiRequest<ApiPayment[]>("/api/payments/me");
+    setMembers([nextMember]);
+    setPayments(apiPayments.map((payment) => mapApiPayment(payment, [nextMember])));
   }
 
   async function loadDataForUser(user: AuthUser) {
@@ -781,6 +790,11 @@ function App() {
 
   function openProfile() {
     setDialog("profile");
+  }
+
+  function openMemberDetails(member: Member) {
+    setAppError("");
+    setSelectedDetailMember(member);
   }
 
   function confirmDelete(member: Member) {
@@ -982,6 +996,7 @@ function App() {
       <MemberPortal
         authUser={authUser}
         member={members[0] ?? null}
+        payments={payments}
         theme={theme}
         onToggleTheme={toggleTheme}
         onLogout={logout}
@@ -1090,6 +1105,7 @@ function App() {
               members={filteredMembers}
               onPay={openPayment}
               onEdit={openEdit}
+              onViewDetails={openMemberDetails}
               onClear={() => setQuery("")}
               canManage={canManage}
             />
@@ -1136,7 +1152,7 @@ function App() {
               onOverdue={() => document.getElementById("overdue")?.scrollIntoView({ behavior: "smooth" })}
             />
             <OverdueSummary buckets={overdueBuckets} overdueCount={overdueMembers.length} onShare={shareOverdueReport} />
-            <ExpiringSoonPanel members={expiringMembers} onEdit={openEdit} canManage={canManage} />
+            <ExpiringSoonPanel members={expiringMembers} onEdit={openEdit} onViewDetails={openMemberDetails} canManage={canManage} />
             <RecentPayments payments={payments} />
           </section>
 
@@ -1145,6 +1161,7 @@ function App() {
             onEdit={openEdit}
             onDelete={confirmDelete}
             onPay={openPayment}
+            onViewDetails={openMemberDetails}
             onExport={exportCsv}
             onShare={shareMemberReport}
             canManage={canManage}
@@ -1180,6 +1197,7 @@ function App() {
           onEdit={openEdit}
           onDelete={confirmDelete}
           onPay={openPayment}
+          onViewDetails={openMemberDetails}
           canManage={canManage}
           authUser={authUser}
           view={mobileView}
@@ -1231,6 +1249,17 @@ function App() {
             ) : (
               <MemberEditor mode={dialog} form={form} setForm={setForm} error={appError} onSubmit={saveMember} busy={busyAction === "member"} />
             )}
+          </section>
+        </div>
+      )}
+
+      {selectedDetailMember && (
+        <div className="modal-backdrop" role="presentation">
+          <section className="modal member-detail-modal" role="dialog" aria-modal="true" aria-labelledby="member-detail-title">
+            <button className="modal-close" onClick={() => setSelectedDetailMember(null)} aria-label="Close member details">
+              <X size={18} />
+            </button>
+            <MemberDetails member={selectedDetailMember} payments={selectedDetailPayments} />
           </section>
         </div>
       )}
@@ -1333,12 +1362,14 @@ function SearchResults({
   members,
   onPay,
   onEdit,
+  onViewDetails,
   onClear,
   canManage,
 }: {
   members: Member[];
   onPay: (member: Member) => void;
   onEdit: (member: Member) => void;
+  onViewDetails: (member: Member) => void;
   onClear: () => void;
   canManage: boolean;
 }) {
@@ -1354,9 +1385,13 @@ function SearchResults({
         <div className="search-result-list">
           {members.slice(0, 6).map((member) => (
             <article key={member.id}>
-              <div className="avatar">{initials(member.name)}</div>
+              <button className="member-identity-button avatar-button" type="button" onClick={() => onViewDetails(member)} aria-label={`Open details for ${member.name}`}>
+                <span className="avatar">{initials(member.name)}</span>
+              </button>
               <div>
-                <strong>{member.name}</strong>
+                <button className="member-identity-button member-name-button" type="button" onClick={() => onViewDetails(member)}>
+                  <strong>{member.name}</strong>
+                </button>
                 <span>{member.phone} · {member.plan} · {money(member.amountDue)}</span>
               </div>
               {canManage && (
@@ -1585,10 +1620,12 @@ function CollectionReport({
 function ExpiringSoonPanel({
   members,
   onEdit,
+  onViewDetails,
   canManage,
 }: {
   members: Member[];
   onEdit: (member: Member) => void;
+  onViewDetails: (member: Member) => void;
   canManage: boolean;
 }) {
   const [open, setOpen] = useState(true);
@@ -1611,9 +1648,13 @@ function ExpiringSoonPanel({
               const label = daysLeft === 0 ? "Expires today" : `${daysLeft}d left`;
               return (
                 <div key={member.id}>
-                  <span className="avatar">{initials(member.name)}</span>
+                  <button className="member-identity-button avatar-button" type="button" onClick={() => onViewDetails(member)} aria-label={`Open details for ${member.name}`}>
+                    <span className="avatar">{initials(member.name)}</span>
+                  </button>
                   <div>
-                    <strong>{member.name}</strong>
+                    <button className="member-identity-button member-name-button" type="button" onClick={() => onViewDetails(member)}>
+                      <strong>{member.name}</strong>
+                    </button>
                     <small>{member.phone} · {member.plan}</small>
                   </div>
                   <div className="expiring-actions">
@@ -1638,6 +1679,7 @@ function MembersTable({
   onEdit,
   onDelete,
   onPay,
+  onViewDetails,
   onExport,
   onShare,
   canManage,
@@ -1646,6 +1688,7 @@ function MembersTable({
   onEdit: (member: Member) => void;
   onDelete: (member: Member) => void;
   onPay: (member: Member) => void;
+  onViewDetails: (member: Member) => void;
   onExport: () => void;
   onShare: () => void;
   canManage: boolean;
@@ -1669,7 +1712,11 @@ function MembersTable({
           <tbody>
             {members.map((member) => (
               <tr key={member.id}>
-                <td>{member.name}</td>
+                <td>
+                  <button className="member-identity-button member-name-button" type="button" onClick={() => onViewDetails(member)}>
+                    {member.name}
+                  </button>
+                </td>
                 <td>{member.phone}</td>
                 <td>{member.plan}</td>
                 <td>{prettyDate(member.dueDate)}</td>
@@ -1761,6 +1808,7 @@ function MobileDashboard({
   onEdit,
   onDelete,
   onPay,
+  onViewDetails,
   canManage,
   authUser,
   view,
@@ -1797,6 +1845,7 @@ function MobileDashboard({
   onEdit: (member: Member) => void;
   onDelete: (member: Member) => void;
   onPay: (member?: Member) => void;
+  onViewDetails: (member: Member) => void;
   canManage: boolean;
   authUser: AuthUser;
   view: MobileView;
@@ -1855,7 +1904,7 @@ function MobileDashboard({
             <p>No member found.</p>
           ) : (
             members.slice(0, 4).map((member) => (
-              <button key={member.id} onClick={() => canManage && onPay(member)}>
+              <button key={member.id} onClick={() => onViewDetails(member)}>
                 <span>{member.name}</span>
                 <small>{member.phone}</small>
                 <b>{money(member.amountDue)}</b>
@@ -1902,10 +1951,11 @@ function MobileDashboard({
             onEdit={onEdit}
             onDelete={onDelete}
             onPay={onPay}
+            onViewDetails={onViewDetails}
             onShare={onShareOverdue}
           />
 
-          <ExpiringSoonPanel members={expiringMembers} onEdit={onEdit} canManage={canManage} />
+          <ExpiringSoonPanel members={expiringMembers} onEdit={onEdit} onViewDetails={onViewDetails} canManage={canManage} />
         </>
       )}
 
@@ -1917,6 +1967,7 @@ function MobileDashboard({
           onEdit={onEdit}
           onDelete={onDelete}
           onPay={onPay}
+          onViewDetails={onViewDetails}
           onShare={onShareMembers}
         />
       )}
@@ -1952,6 +2003,7 @@ function MobileDashboard({
           onEdit={onEdit}
           onDelete={onDelete}
           onPay={onPay}
+          onViewDetails={onViewDetails}
           onShare={onShareOverdue}
         />
       )}
@@ -1973,6 +2025,7 @@ function OverdueMembersPanel({
   onEdit,
   onDelete,
   onPay,
+  onViewDetails,
   onShare,
 }: {
   overdueMembers: Member[];
@@ -1980,6 +2033,7 @@ function OverdueMembersPanel({
   onEdit: (member: Member) => void;
   onDelete: (member: Member) => void;
   onPay: (member: Member) => void;
+  onViewDetails: (member: Member) => void;
   onShare?: () => void;
 }) {
   const [open, setOpen] = useState(true);
@@ -2012,6 +2066,7 @@ function OverdueMembersPanel({
               onEdit={onEdit}
               onDelete={onDelete}
               onPay={onPay}
+              onViewDetails={onViewDetails}
               showOverdue
             />
           ))
@@ -2028,6 +2083,7 @@ function MobileMembersScreen({
   onEdit,
   onDelete,
   onPay,
+  onViewDetails,
   onShare,
 }: {
   members: Member[];
@@ -2036,6 +2092,7 @@ function MobileMembersScreen({
   onEdit: (member: Member) => void;
   onDelete: (member: Member) => void;
   onPay: (member: Member) => void;
+  onViewDetails: (member: Member) => void;
   onShare: () => void;
 }) {
   return (
@@ -2066,6 +2123,7 @@ function MobileMembersScreen({
             onEdit={onEdit}
             onDelete={onDelete}
             onPay={onPay}
+            onViewDetails={onViewDetails}
           />
         ))}
       </article>
@@ -2192,6 +2250,7 @@ function MobileOverdueScreen({
   onEdit,
   onDelete,
   onPay,
+  onViewDetails,
   onShare,
 }: {
   overdueMembers: Member[];
@@ -2201,6 +2260,7 @@ function MobileOverdueScreen({
   onEdit: (member: Member) => void;
   onDelete: (member: Member) => void;
   onPay: (member: Member) => void;
+  onViewDetails: (member: Member) => void;
   onShare: () => void;
 }) {
   return (
@@ -2220,6 +2280,7 @@ function MobileOverdueScreen({
         onEdit={onEdit}
         onDelete={onDelete}
         onPay={onPay}
+        onViewDetails={onViewDetails}
         onShare={onShare}
       />
     </section>
@@ -2232,6 +2293,7 @@ function MobileMemberRow({
   onEdit,
   onDelete,
   onPay,
+  onViewDetails,
   showOverdue = false,
 }: {
   member: Member;
@@ -2239,6 +2301,7 @@ function MobileMemberRow({
   onEdit: (member: Member) => void;
   onDelete: (member: Member) => void;
   onPay: (member: Member) => void;
+  onViewDetails: (member: Member) => void;
   showOverdue?: boolean;
 }) {
   const planAmount = plans.find((plan) => plan.name === member.plan)?.amount ?? member.amountDue;
@@ -2249,9 +2312,13 @@ function MobileMemberRow({
 
   return (
     <div className={`mobile-member-card ${showOverdue ? "overdue-member-card" : ""}`}>
-      <div className="avatar">{initials(member.name)}</div>
+      <button className="member-identity-button avatar-button" type="button" onClick={() => onViewDetails(member)} aria-label={`Open details for ${member.name}`}>
+        <span className="avatar">{initials(member.name)}</span>
+      </button>
       <div>
-        <strong>{member.name}</strong>
+        <button className="member-identity-button member-name-button" type="button" onClick={() => onViewDetails(member)}>
+          <strong>{member.name}</strong>
+        </button>
         <span>{detailText}</span>
       </div>
       <b className={`member-status ${statusClass(member.status)}`}>
@@ -2708,15 +2775,106 @@ function LoginScreen({
   );
 }
 
+function paymentPaidThrough(payment: Payment) {
+  return plusMonths(payment.paymentDate, payment.durationMonths || (plans.find((plan) => plan.name === payment.plan)?.months ?? 1));
+}
+
+function PaymentHistoryList({ payments }: { payments: Payment[] }) {
+  if (payments.length === 0) {
+    return <p className="empty-panel">No previous paid plans found.</p>;
+  }
+
+  return (
+    <div className="payment-history-list">
+      {payments.map((payment, index) => (
+        <article key={payment.id} className={index === 0 ? "latest-payment" : ""}>
+          <div className="history-icon"><ReceiptText size={17} /></div>
+          <div>
+            <strong>{payment.plan}</strong>
+            <span>{prettyDate(payment.paymentDate)} to {prettyDate(paymentPaidThrough(payment))}</span>
+            <small>{payment.mode} - {payment.receipt}</small>
+          </div>
+          <b>{money(payment.amount)}</b>
+        </article>
+      ))}
+    </div>
+  );
+}
+
+function MemberDetails({ member, payments }: { member: Member; payments: Payment[] }) {
+  const plan = plans.find((item) => item.name === member.plan);
+  const latestPayment = payments[0] ?? null;
+  const previousPayments = payments.slice(1);
+  const planAmount = plan?.amount ?? member.amountDue;
+
+  return (
+    <div className="member-detail-content">
+      <header className="member-detail-head">
+        <span className="avatar">{initials(member.name)}</span>
+        <div>
+          <p>{member.rollNo}</p>
+          <h3 id="member-detail-title">{member.name}</h3>
+          <small>{member.phone}</small>
+        </div>
+      </header>
+
+      <section className="member-detail-grid">
+        <div>
+          <span>Current Plan</span>
+          <strong>{member.plan}</strong>
+        </div>
+        <div>
+          <span>Plan Fee</span>
+          <strong>{money(planAmount)}</strong>
+        </div>
+        <div>
+          <span>Paid Up To</span>
+          <strong>{prettyDate(member.paidUpTo)}</strong>
+        </div>
+        <div>
+          <span>Amount Due</span>
+          <strong>{money(member.amountDue)}</strong>
+        </div>
+        <div>
+          <span>Status</span>
+          <strong className={statusClass(member.status)}>{member.status}</strong>
+        </div>
+        <div>
+          <span>Days Overdue</span>
+          <strong>{member.daysOverdue > 0 ? `${member.daysOverdue} days` : "-"}</strong>
+        </div>
+      </section>
+
+      <section className="member-detail-section">
+        <div className="panel-head">
+          <h3>Current / Last Paid</h3>
+          {latestPayment && <span>{money(latestPayment.amount)}</span>}
+        </div>
+        {latestPayment ? <PaymentHistoryList payments={[latestPayment]} /> : <p className="empty-panel">No paid record found yet.</p>}
+      </section>
+
+      <section className="member-detail-section">
+        <div className="panel-head">
+          <h3>Previous Paid Plans</h3>
+          <span>{previousPayments.length}</span>
+        </div>
+        <PaymentHistoryList payments={previousPayments} />
+      </section>
+    </div>
+  );
+}
+
 function MemberPortal({
   authUser,
   member,
+  payments,
   theme,
   onToggleTheme,
   onLogout,
 }: {
   authUser: AuthUser;
   member: Member | null;
+  payments: Payment[];
   theme: ThemeMode;
   onToggleTheme: () => void;
   onLogout: () => void;
@@ -2769,16 +2927,8 @@ function MemberPortal({
       </section>
 
       <section className="panel member-plans-panel">
-        <div className="panel-head"><h3>Available Plans</h3><span>{plans.length}</span></div>
-        <div className="mobile-plan-list">
-          {plans.map((plan) => (
-            <div key={plan.name}>
-              <span>{plan.name}</span>
-              <strong>{money(plan.amount)}</strong>
-              <small>{plan.months} month{plan.months > 1 ? "s" : ""}</small>
-            </div>
-          ))}
-        </div>
+        <div className="panel-head"><h3>Payment History</h3><span>{payments.length}</span></div>
+        <PaymentHistoryList payments={payments} />
       </section>
     </main>
   );

@@ -27,7 +27,7 @@ public class SecurityConfig {
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/api/health", "/api/auth/login", "/api/auth/member-login", "/api/auth/signup").permitAll()
-                        .requestMatchers(org.springframework.http.HttpMethod.GET, "/api/members/me").authenticated()
+                        .requestMatchers(org.springframework.http.HttpMethod.GET, "/api/members/me", "/api/payments/me").authenticated()
                         .requestMatchers(org.springframework.http.HttpMethod.GET, "/api/members/**", "/api/payments/**", "/api/reports/**").hasAnyRole("ADMIN", "TRAINER")
                         .requestMatchers(org.springframework.http.HttpMethod.GET, "/api/**").authenticated()
                         .requestMatchers("/api/members/**", "/api/payments/**", "/api/reports/**").hasAnyRole("ADMIN", "TRAINER")
