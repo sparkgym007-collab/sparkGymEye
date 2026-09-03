@@ -56,7 +56,10 @@ public class CookieSessionAuthFilter extends OncePerRequestFilter {
     }
 
     private void expireSessionCookie(HttpServletResponse response, HttpServletRequest request) {
-        boolean secure = request.isSecure() || "https".equalsIgnoreCase(request.getHeader("X-Forwarded-Proto"));
+        boolean secure = request.isSecure()
+                || "https".equalsIgnoreCase(request.getHeader("X-Forwarded-Proto"))
+                || request.getServerName().endsWith(".onrender.com")
+                || request.getServerName().endsWith(".vercel.app");
         ResponseCookie cookie = ResponseCookie.from("SPARK_SESSION", "")
                 .httpOnly(true)
                 .secure(secure)
@@ -69,12 +72,21 @@ public class CookieSessionAuthFilter extends OncePerRequestFilter {
 
     private String readCookie(HttpServletRequest request) {
         if (request.getCookies() == null) {
-            return null;
+            return readBearerToken(request);
         }
-        return Arrays.stream(request.getCookies())
+        String cookieToken = Arrays.stream(request.getCookies())
                 .filter(cookie -> "SPARK_SESSION".equals(cookie.getName()))
                 .map(Cookie::getValue)
                 .findFirst()
                 .orElse(null);
+        return cookieToken == null ? readBearerToken(request) : cookieToken;
+    }
+
+    private String readBearerToken(HttpServletRequest request) {
+        String authorization = request.getHeader(HttpHeaders.AUTHORIZATION);
+        if (authorization == null || !authorization.startsWith("Bearer ")) {
+            return null;
+        }
+        return authorization.substring("Bearer ".length()).trim();
     }
 }

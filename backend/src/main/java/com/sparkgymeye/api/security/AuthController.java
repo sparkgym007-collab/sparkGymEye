@@ -29,31 +29,40 @@ public class AuthController {
     public AuthResponse login(@Valid @RequestBody LoginRequest request, HttpServletRequest servletRequest, HttpServletResponse response) {
         AuthService.LoginResult result = authService.login(request.phone(), request.password());
         addSessionCookie(response, servletRequest, result.token(), 14 * 24 * 60 * 60);
-        return AuthResponse.from(result.user());
+        return AuthResponse.from(result.user(), result.token());
     }
 
     @PostMapping("/member-login")
     public AuthResponse memberLogin(@Valid @RequestBody MemberLoginRequest request, HttpServletRequest servletRequest, HttpServletResponse response) {
         AuthService.LoginResult result = authService.memberLogin(request.phone());
         addSessionCookie(response, servletRequest, result.token(), 14 * 24 * 60 * 60);
-        return AuthResponse.from(result.user(), Role.MEMBER);
+        return AuthResponse.from(result.user(), Role.MEMBER, result.token());
     }
 
     @PostMapping("/signup")
     public AuthResponse signup(@Valid @RequestBody SignupRequest request, HttpServletRequest servletRequest, HttpServletResponse response) {
         AuthService.LoginResult result = authService.signup(request);
         addSessionCookie(response, servletRequest, result.token(), 14 * 24 * 60 * 60);
-        return AuthResponse.from(result.user());
+        return AuthResponse.from(result.user(), result.token());
     }
 
     @GetMapping("/me")
-    public AuthResponse me(@CookieValue(SESSION_COOKIE) String token) {
+    public AuthResponse me(
+            @CookieValue(value = SESSION_COOKIE, required = false) String cookieToken,
+            HttpServletRequest servletRequest
+    ) {
+        String token = requireRequestToken(cookieToken, servletRequest);
         AuthService.SessionIdentity identity = authService.requireSessionByToken(token);
         return AuthResponse.from(identity.user(), identity.role());
     }
 
     @PutMapping("/me")
-    public AuthResponse updateMe(@CookieValue(SESSION_COOKIE) String token, @Valid @RequestBody UpdateProfileRequest request) {
+    public AuthResponse updateMe(
+            @CookieValue(value = SESSION_COOKIE, required = false) String cookieToken,
+            HttpServletRequest servletRequest,
+            @Valid @RequestBody UpdateProfileRequest request
+    ) {
+        String token = requireRequestToken(cookieToken, servletRequest);
         return AuthResponse.from(authService.updateProfile(token, request));
     }
 
@@ -71,10 +80,11 @@ public class AuthController {
 
     @PostMapping("/logout")
     public ResponseEntity<Void> logout(
-            @CookieValue(value = SESSION_COOKIE, required = false) String token,
+            @CookieValue(value = SESSION_COOKIE, required = false) String cookieToken,
             HttpServletRequest servletRequest,
             HttpServletResponse response
     ) {
+        String token = readRequestToken(cookieToken, servletRequest);
         if (token != null) {
             authService.logout(token);
         }
@@ -91,7 +101,29 @@ public class AuthController {
     }
 
     private boolean isSecureRequest(HttpServletRequest request) {
-        return request.isSecure() || "https".equalsIgnoreCase(request.getHeader("X-Forwarded-Proto"));
+        return request.isSecure()
+                || "https".equalsIgnoreCase(request.getHeader("X-Forwarded-Proto"))
+                || request.getServerName().endsWith(".onrender.com")
+                || request.getServerName().endsWith(".vercel.app");
+    }
+
+    private String requireRequestToken(String cookieToken, HttpServletRequest request) {
+        String token = readRequestToken(cookieToken, request);
+        if (token == null || token.isBlank()) {
+            throw new org.springframework.security.authentication.BadCredentialsException("Session expired");
+        }
+        return token;
+    }
+
+    private String readRequestToken(String cookieToken, HttpServletRequest request) {
+        if (cookieToken != null && !cookieToken.isBlank()) {
+            return cookieToken;
+        }
+        String authorization = request.getHeader(HttpHeaders.AUTHORIZATION);
+        if (authorization == null || !authorization.startsWith("Bearer ")) {
+            return null;
+        }
+        return authorization.substring("Bearer ".length()).trim();
     }
 
 }

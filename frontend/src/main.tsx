@@ -111,6 +111,7 @@ type ApiAuthUser = {
   fullName: string;
   phone: string;
   role: AuthRole;
+  sessionToken?: string;
 };
 
 type MonthlyCollection = {
@@ -137,8 +138,10 @@ const HEALTH_RETRY_DELAYS_MS = [0, 2000, 4000, 8000, 15000, 15000, 15000, 15000]
 const HEALTH_TIMEOUT_MS = 12000;
 const TRAINER_IMAGE_URL = "https://res.cloudinary.com/wsgsjtrj/image/upload/v1787749514/ChatGPT_Image_Aug_26_2026_06_34_20_PM.png";
 const CLIENT_STATE_VERSION = "2026-09-03-db-only-v1";
+const AUTH_TOKEN_STORAGE_KEY = "spark-auth-token";
 const LEGACY_STORAGE_PREFIXES = ["spark-", "sparkgymeye"];
 const today = new Date();
+let authTokenMemory: string | null = null;
 
 function money(value: number) {
   return new Intl.NumberFormat("en-IN", {
@@ -204,7 +207,12 @@ function createEmptyForm(): MemberForm {
 }
 
 function clearLegacyClientData() {
-  const currentVersion = window.localStorage.getItem("spark-client-state-version");
+  let currentVersion: string | null = null;
+  try {
+    currentVersion = window.localStorage.getItem("spark-client-state-version");
+  } catch {
+    return;
+  }
   if (currentVersion === CLIENT_STATE_VERSION) return;
 
   const removeLegacyKeys = (storage: Storage) => {
@@ -213,15 +221,47 @@ function clearLegacyClientData() {
     keys.forEach((key) => {
       if (key === "spark-theme") return;
       if (key === "spark-client-state-version") return;
+      if (key === AUTH_TOKEN_STORAGE_KEY) return;
       if (LEGACY_STORAGE_PREFIXES.some((prefix) => key.toLowerCase().startsWith(prefix))) {
         storage.removeItem(key);
       }
     });
   };
 
-  removeLegacyKeys(window.localStorage);
-  removeLegacyKeys(window.sessionStorage);
-  window.localStorage.setItem("spark-client-state-version", CLIENT_STATE_VERSION);
+  try {
+    removeLegacyKeys(window.localStorage);
+    removeLegacyKeys(window.sessionStorage);
+    window.localStorage.setItem("spark-client-state-version", CLIENT_STATE_VERSION);
+  } catch {
+    // Storage cleanup is best-effort; API data still comes from the DB.
+  }
+}
+
+function readAuthToken() {
+  try {
+    return authTokenMemory ?? window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY);
+  } catch {
+    return authTokenMemory;
+  }
+}
+
+function saveAuthToken(token?: string) {
+  if (!token) return;
+  authTokenMemory = token;
+  try {
+    window.localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, token);
+  } catch {
+    // Keep the in-memory token for browsers that block local storage.
+  }
+}
+
+function clearAuthToken() {
+  authTokenMemory = null;
+  try {
+    window.localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
+  } catch {
+    // Nothing else to clear when storage is unavailable.
+  }
 }
 
 function getInitialTheme(): ThemeMode {
@@ -360,6 +400,7 @@ async function waitForBackendReady(onAttempt: (attempt: number, status: StartupS
 }
 
 async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const authToken = readAuthToken();
   let response: Response;
   try {
     response = await fetch(`${API_BASE}${path}`, {
@@ -370,6 +411,7 @@ async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
         "Content-Type": "application/json",
         "Cache-Control": "no-store",
         "Pragma": "no-cache",
+        ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
         ...init.headers,
       },
     });
@@ -579,6 +621,7 @@ function App() {
     setDialog(null);
     setSelectedMember(null);
     setMemberToDelete(null);
+    clearAuthToken();
     setAppError("Your session expired. Please log in again.");
     return true;
   }
@@ -840,6 +883,7 @@ function App() {
         body: JSON.stringify({ phone, password }),
       });
       const nextUser = mapAuthUser(user);
+      saveAuthToken(user.sessionToken);
       await loadDataForUser(nextUser);
       setAuthUser(nextUser);
     } catch (error) {
@@ -859,6 +903,7 @@ function App() {
         body: JSON.stringify({ phone }),
       });
       const nextUser = mapAuthUser(user);
+      saveAuthToken(user.sessionToken);
       await loadDataForUser(nextUser);
       setAuthUser(nextUser);
     } catch (error) {
@@ -878,6 +923,7 @@ function App() {
         body: JSON.stringify({ fullName, phone, password }),
       });
       const nextUser = mapAuthUser(user);
+      saveAuthToken(user.sessionToken);
       await loadDataForUser(nextUser);
       setAuthUser(nextUser);
     } catch (error) {
@@ -907,6 +953,7 @@ function App() {
 
   async function logout() {
     await apiRequest<void>("/api/auth/logout", { method: "POST" }).catch(() => undefined);
+    clearAuthToken();
     setAuthUser(null);
     setMembers([]);
     setPayments([]);
