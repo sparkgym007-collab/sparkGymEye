@@ -611,7 +611,7 @@ function App() {
   const [paymentPlan, setPaymentPlan] = useState("1 Month");
   const [paymentSearch, setPaymentSearch] = useState("");
   const [reportYear, setReportYear] = useState(today.getFullYear());
-  const [selectedReportMonth, setSelectedReportMonth] = useState(Math.max(0, today.getMonth() - 1));
+  const [selectedReportMonth, setSelectedReportMonth] = useState(today.getMonth());
   const [appError, setAppError] = useState("");
   const [busyAction, setBusyAction] = useState<BusyAction>(null);
   const [theme, setTheme] = useState<ThemeMode>(getInitialTheme);
@@ -1102,7 +1102,7 @@ function App() {
       <main className="desktop-shell">
         <Sidebar onLogout={logout} />
         <section className="desktop-dashboard">
-          <Topbar query={query} setQuery={setQuery} theme={theme} onToggleTheme={toggleTheme} />
+          <Topbar query={query} setQuery={setQuery} authUser={authUser} theme={theme} onToggleTheme={toggleTheme} />
           {appError && <p className="app-error">{appError}</p>}
           {query.trim() && (
             <SearchResults
@@ -1337,11 +1337,13 @@ function ThemeToggle({ theme, onToggle }: { theme: ThemeMode; onToggle: () => vo
 function Topbar({
   query,
   setQuery,
+  authUser,
   theme,
   onToggleTheme,
 }: {
   query: string;
   setQuery: (value: string) => void;
+  authUser: AuthUser;
   theme: ThemeMode;
   onToggleTheme: () => void;
 }) {
@@ -1355,8 +1357,8 @@ function Topbar({
       <ThemeToggle theme={theme} onToggle={onToggleTheme} />
       <button className="icon-btn" aria-label="Notifications"><Bell size={18} /><span>3</span></button>
       <div className="profile">
-        <img alt="Trainer profile" src={TRAINER_IMAGE_URL} />
-        <div><strong>Trainer</strong><small>+91 98765 43210</small></div>
+        <img alt={`${authUser.name} profile`} src={TRAINER_IMAGE_URL} />
+        <div><strong>{authUser.name}</strong><small>{authUser.phone}</small></div>
       </div>
     </header>
   );
