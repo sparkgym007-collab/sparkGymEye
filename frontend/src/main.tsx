@@ -600,12 +600,14 @@ function App() {
   const [mobileView, setMobileView] = useState<MobileView>("dashboard");
   const [payments, setPayments] = useState<Payment[]>([]);
   const [query, setQuery] = useState("");
+  const [receivableOnly, setReceivableOnly] = useState(false);
+  const [paymentHistoryMonth, setPaymentHistoryMonth] = useState<{ year: number; month: number } | null>(null);
   const [dialog, setDialog] = useState<"add" | "edit" | "payment" | "profile" | null>(null);
   const [selectedMember, setSelectedMember] = useState<Member | null>(null);
   const [selectedDetailMember, setSelectedDetailMember] = useState<Member | null>(null);
   const [memberToDelete, setMemberToDelete] = useState<Member | null>(null);
   const [form, setForm] = useState<MemberForm>(() => createEmptyForm());
-  const [paymentAmount, setPaymentAmount] = useState(600);
+  const [paymentAmount, setPaymentAmount] = useState(plans[0].amount);
   const [paymentMode, setPaymentMode] = useState<Payment["mode"]>("UPI");
   const [paymentDate, setPaymentDate] = useState(() => currentDateInputValue());
   const [paymentPlan, setPaymentPlan] = useState("1 Month");
@@ -1035,9 +1037,9 @@ function App() {
       await sharePdf(
         `Collection Report ${reportYear}`,
         [
-          `${selectedCollection.label}: ${money(selectedCollection.total)}`,
-          `${selectedCollection.memberCount} paid members, ${selectedCollection.paymentCount} payments`,
-          `Plans selected: ${planSummary(selectedCollection.planCounts)}`,
+          `Total collection: ${money(yearlyCollection.reduce((sum, month) => sum + month.total, 0))}`,
+          `${yearlyCollection.reduce((sum, month) => sum + month.paymentCount, 0)} payments`,
+          "Monthly list for the displayed year",
         ],
         ["Month", "Paid Members", "Payments", "Collection", "Plans Selected"],
         yearlyCollection.map((month) => [
@@ -1134,7 +1136,50 @@ function App() {
             overdueAmount={overdueAmount}
             monthlyCollection={monthlyCollection}
             monthlyPaymentCount={currentMonthCollection.paymentCount}
+            onMembers={() => {
+              setQuery("");
+              setReceivableOnly(false);
+              document.getElementById("members")?.scrollIntoView({ behavior: "smooth" });
+            }}
+            onReceivable={() => {
+              setQuery("");
+              setReceivableOnly(true);
+              document.getElementById("members")?.scrollIntoView({ behavior: "smooth" });
+            }}
+            onOverdue={() => document.getElementById("desktop-overdue-members")?.scrollIntoView({ behavior: "smooth" })}
+            onCollection={() => {
+              const now = new Date();
+              setReportYear(now.getFullYear());
+              setSelectedReportMonth(now.getMonth());
+              document.getElementById("collection-report")?.scrollIntoView({ behavior: "smooth" });
+            }}
           />
+
+          <section className="summary-grid">
+            <QuickActions
+              canManage={canManage}
+              onAdd={openAdd}
+              onPay={() => openPayment()}
+              onFees={() => document.getElementById("members")?.scrollIntoView({ behavior: "smooth" })}
+              onOverdue={() => document.getElementById("desktop-overdue-members")?.scrollIntoView({ behavior: "smooth" })}
+            />
+            <OverdueSummary buckets={overdueBuckets} overdueCount={overdueMembers.length} onShare={shareOverdueReport} />
+          </section>
+
+          <MembersTable
+            id="desktop-overdue-members"
+            title="Overdue Members"
+            members={overdueMembers}
+            onEdit={openEdit}
+            onDelete={confirmDelete}
+            onPay={openPayment}
+            onViewDetails={openMemberDetails}
+            onExport={exportCsv}
+            onShare={shareOverdueReport}
+            canManage={canManage}
+          />
+
+          <ExpiringSoonPanel members={expiringMembers} onEdit={openEdit} onViewDetails={openMemberDetails} canManage={canManage} />
 
           <CollectionReport
             yearlyCollection={yearlyCollection}
@@ -1145,23 +1190,15 @@ function App() {
             setReportYear={setReportYear}
             setSelectedReportMonth={setSelectedReportMonth}
             onShare={shareCollectionReport}
+            onOpenMonth={(month) => setPaymentHistoryMonth({ year: reportYear, month })}
           />
 
-          <section className="summary-grid">
-            <QuickActions
-              canManage={canManage}
-              onAdd={openAdd}
-              onPay={() => openPayment()}
-              onFees={() => document.getElementById("members")?.scrollIntoView({ behavior: "smooth" })}
-              onOverdue={() => document.getElementById("overdue")?.scrollIntoView({ behavior: "smooth" })}
-            />
-            <OverdueSummary buckets={overdueBuckets} overdueCount={overdueMembers.length} onShare={shareOverdueReport} />
-            <ExpiringSoonPanel members={expiringMembers} onEdit={openEdit} onViewDetails={openMemberDetails} canManage={canManage} />
-            <RecentPayments payments={payments} />
-          </section>
+          <RecentPayments payments={payments} />
 
           <MembersTable
-            members={filteredMembers}
+            title={receivableOnly ? "Members with Outstanding Fees" : "Members & Fees"}
+            onShowAll={receivableOnly ? () => setReceivableOnly(false) : undefined}
+            members={receivableOnly ? filteredMembers.filter((member) => member.amountDue > 0) : filteredMembers}
             onEdit={openEdit}
             onDelete={confirmDelete}
             onPay={openPayment}
@@ -1214,10 +1251,20 @@ function App() {
           theme={theme}
           onToggleTheme={toggleTheme}
           onShareCollection={shareCollectionReport}
+          onOpenMonth={(month) => setPaymentHistoryMonth({ year: reportYear, month })}
           onShareMembers={shareMemberReport}
           onShareOverdue={shareOverdueReport}
         />
       </main>
+
+      {paymentHistoryMonth && (
+        <MonthPaymentHistory
+          year={paymentHistoryMonth.year}
+          month={paymentHistoryMonth.month}
+          payments={payments}
+          onClose={() => setPaymentHistoryMonth(null)}
+        />
+      )}
 
       {dialog && (
         <div className="modal-backdrop" role="presentation">
@@ -1308,7 +1355,7 @@ function Sidebar({ onLogout }: { onLogout: () => void }) {
         <span>Fees Management</span>
         <a href="#records"><FileSpreadsheet size={17} /> Fees Records</a>
         <a href="#payments"><WalletCards size={17} /> Payments</a>
-        <a href="#overdue"><ShieldAlert size={17} /> Overdue</a>
+        <a href="#desktop-overdue-members"><ShieldAlert size={17} /> Overdue</a>
         <a href="#reports"><CalendarClock size={17} /> Reports</a>
         <span>Settings</span>
         <a href="#users"><Users size={17} /> Users & Roles</a>
@@ -1421,6 +1468,10 @@ function Stats({
   overdueAmount,
   monthlyCollection,
   monthlyPaymentCount,
+  onMembers,
+  onReceivable,
+  onOverdue,
+  onCollection,
 }: {
   totalMembers: number;
   totalReceivable: number;
@@ -1428,20 +1479,24 @@ function Stats({
   overdueAmount: number;
   monthlyCollection: number;
   monthlyPaymentCount: number;
+  onMembers: () => void;
+  onReceivable: () => void;
+  onOverdue: () => void;
+  onCollection: () => void;
 }) {
   return (
     <section className="stats-grid">
-      <StatCard label="Total Members" value={String(totalMembers)} detail="Active members" tone="violet" icon={<Users />} />
-      <StatCard label="Total Receivable" value={money(totalReceivable)} detail={`From ${totalMembers} members`} tone="red" icon={<ShieldAlert />} />
-      <StatCard label="Overdue Amount" value={money(overdueAmount)} detail={`From ${overdueCount} members`} tone="orange" icon={<IndianRupee />} />
-      <StatCard label="Collection This Month" value={money(monthlyCollection)} detail={`From ${monthlyPaymentCount} payments`} tone="lime" icon={<WalletCards />} />
+      <StatCard label="Total Members" value={String(totalMembers)} detail="View all members" tone="violet" icon={<Users />} onClick={onMembers} />
+      <StatCard label="Total Receivable" value={money(totalReceivable)} detail={`From ${totalMembers} members`} tone="red" icon={<ShieldAlert />} onClick={onReceivable} />
+      <StatCard label="Overdue Amount" value={money(overdueAmount)} detail={`From ${overdueCount} members`} tone="orange" icon={<IndianRupee />} onClick={onOverdue} />
+      <StatCard label="Collection This Month" value={money(monthlyCollection)} detail={`From ${monthlyPaymentCount} payments`} tone="lime" icon={<WalletCards />} onClick={onCollection} />
     </section>
   );
 }
 
-function StatCard({ label, value, detail, tone, icon }: { label: string; value: string; detail: string; tone: string; icon: React.ReactNode }) {
+function StatCard({ label, value, detail, tone, icon, onClick }: { label: string; value: string; detail: string; tone: string; icon: React.ReactNode; onClick: () => void }) {
   return (
-    <article className={`stat ${tone}`}>
+    <button type="button" className={`stat ${tone}`} onClick={onClick} aria-label={`View ${label.toLowerCase()}`}>
       <div className="stat-icon">{icon}</div>
       <div>
         <span>{label}</span>
@@ -1449,23 +1504,35 @@ function StatCard({ label, value, detail, tone, icon }: { label: string; value: 
         <small>{detail}</small>
       </div>
       <i />
-    </article>
+    </button>
   );
+}
+
+function usePanelOpen(revealVersion: number) {
+  const [open, setOpen] = useState(true);
+  useEffect(() => {
+    if (revealVersion > 0) setOpen(true);
+  }, [revealVersion]);
+  return [open, setOpen] as const;
 }
 
 function OverdueSummary({
   buckets,
   overdueCount,
   onShare,
+  id = "overdue",
+  revealVersion = 0,
 }: {
   buckets: { label: string; members: Member[]; tone: string }[];
   overdueCount: number;
   onShare?: () => void;
+  id?: string;
+  revealVersion?: number;
 }) {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = usePanelOpen(revealVersion);
   const total = Math.max(1, buckets.reduce((sum, bucket) => sum + bucket.members.reduce((part, member) => part + member.amountDue, 0), 0));
   return (
-    <article className={`panel overdue-summary collapsible-panel ${open ? "open" : "closed"}`} id="overdue">
+    <article className={`panel overdue-summary collapsible-panel ${open ? "open" : "closed"}`} id={id} tabIndex={-1}>
       <div className="panel-head">
         <h3>Overdue Summary</h3>
         <div className="panel-actions">
@@ -1530,6 +1597,7 @@ function RecentPayments({ payments }: { payments: Payment[] }) {
 }
 
 function CollectionReport({
+  id = "collection-report",
   yearlyCollection,
   selectedCollection,
   reportYear,
@@ -1538,7 +1606,10 @@ function CollectionReport({
   setReportYear,
   setSelectedReportMonth,
   onShare,
+  onOpenMonth,
 }: {
+  id?: string;
+  onOpenMonth: (month: number) => void;
   yearlyCollection: MonthlyCollection[];
   selectedCollection: MonthlyCollection;
   reportYear: number;
@@ -1548,20 +1619,27 @@ function CollectionReport({
   setSelectedReportMonth: (month: number) => void;
   onShare: () => void;
 }) {
+  const [open, setOpen] = useState(true);
   const yearlyTotal = yearlyCollection.reduce((sum, month) => sum + month.total, 0);
   const collectionMonths = yearlyCollection.filter((month) => month.paymentCount > 0).length;
 
   return (
-    <article className="panel collection-report" id="collection-report">
+    <article className={`panel collection-report collapsible-panel ${open ? "open" : "closed"}`} id={id}>
       <div className="panel-head collection-report-head">
         <div>
           <h3>Collection Report</h3>
           <span>{reportYear} monthly payment data</span>
         </div>
-        <button className="share-button" type="button" onClick={onShare} aria-label="Share collection report" title="Share collection report">
-          <Share2 size={15} />
-        </button>
+        <div className="panel-actions">
+          <button className="share-button" type="button" onClick={onShare} aria-label="Share displayed collection list" title="Share displayed collection list">
+            <Share2 size={15} />
+          </button>
+          <button className="collapse-toggle" type="button" onClick={() => setOpen((value) => !value)} aria-expanded={open} aria-controls={`${id}-body`} aria-label={open ? "Collapse collection report" : "Expand collection report"}>
+            <ChevronRight size={16} />
+          </button>
+        </div>
       </div>
+      <div className="collapse-body" id={`${id}-body`} hidden={!open}>
       <div className="report-controls">
         <div className="report-months" aria-label="Collection month">
           {yearlyCollection.map((month) => (
@@ -1608,8 +1686,8 @@ function CollectionReport({
           </thead>
           <tbody>
             {yearlyCollection.map((month) => (
-              <tr key={month.monthIndex} className={month.monthIndex === selectedReportMonth ? "selected-row" : ""}>
-                <td>{month.label}</td>
+              <tr key={month.monthIndex} className={`collection-month-row ${month.monthIndex === selectedReportMonth ? "selected-row" : ""}`} onClick={() => onOpenMonth(month.monthIndex)}>
+                <td><button type="button" className="member-identity-button" aria-label={`View ${month.label} ${reportYear} payment history`} onClick={(event) => { event.stopPropagation(); onOpenMonth(month.monthIndex); }}>{month.label}</button></td>
                 <td>{month.memberCount}</td>
                 <td>{month.paymentCount}</td>
                 <td>{money(month.total)}</td>
@@ -1619,7 +1697,78 @@ function CollectionReport({
           </tbody>
         </table>
       </div>
+      </div>
     </article>
+  );
+}
+
+function MonthPaymentHistory({ year, month, payments, onClose }: {
+  year: number;
+  month: number;
+  payments: Payment[];
+  onClose: () => void;
+}) {
+  const [sharing, setSharing] = useState(false);
+  const [error, setError] = useState("");
+  const prefix = `${year}-${String(month + 1).padStart(2, "0")}-`;
+  const rows = payments.filter((payment) => payment.paymentDate.startsWith(prefix))
+    .sort((a, b) => a.paymentDate.localeCompare(b.paymentDate) || a.id - b.id);
+  const title = `${new Intl.DateTimeFormat("en-IN", { month: "long" }).format(new Date(year, month, 1))} ${year} Payment History`;
+  const total = rows.reduce((sum, payment) => sum + payment.amount, 0);
+
+  useEffect(() => {
+    const previousFocus = document.activeElement as HTMLElement | null;
+    const dialog = document.getElementById("month-payment-dialog");
+    const closeButton = dialog?.querySelector<HTMLButtonElement>("button");
+    closeButton?.focus();
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") onClose();
+      if (event.key !== "Tab" || !dialog) return;
+      const buttons = Array.from(dialog.querySelectorAll<HTMLButtonElement>("button:not(:disabled)"));
+      const first = buttons[0];
+      const last = buttons[buttons.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => { document.removeEventListener("keydown", onKeyDown); previousFocus?.focus(); };
+  }, [onClose]);
+
+  async function shareHistory() {
+    setSharing(true);
+    setError("");
+    try {
+      await sharePdf(title, [`${rows.length} payments`, `Total: ${money(total)}`, "Date order: oldest first"],
+        ["Name", "Amount", "Payment Date"],
+        rows.map((payment) => [payment.memberName, money(payment.amount), prettyDate(payment.paymentDate)]),
+        [130, 60, 60]);
+    } catch (failure) {
+      if (!(failure instanceof Error && failure.name === "AbortError")) {
+        setError(failure instanceof Error ? failure.message : "Could not share payment history");
+      }
+    } finally { setSharing(false); }
+  }
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section className="modal month-payment-modal" id="month-payment-dialog" role="dialog" aria-modal="true" aria-labelledby="month-payment-title">
+        <button className="modal-close" type="button" onClick={onClose} aria-label="Close monthly payment history"><X size={18} /></button>
+        <div className="panel-head">
+          <div><h3 id="month-payment-title">{title}</h3><p>{rows.length} payments · {money(total)}</p><small>Date order: oldest first</small></div>
+          <button className="share-button" type="button" onClick={shareHistory} disabled={sharing} aria-label="Share this month's payment history"><Share2 size={15} /></button>
+        </div>
+        {error && <p className="form-error" role="alert">{error}</p>}
+        <div className="table-wrap">
+          <table>
+            <thead><tr><th>Name</th><th>Amount</th><th>Payment Date</th></tr></thead>
+            <tbody>
+              {rows.map((payment) => <tr key={payment.id}><td>{payment.memberName}</td><td>{money(payment.amount)}</td><td>{prettyDate(payment.paymentDate)}</td></tr>)}
+              {rows.length === 0 && <tr><td colSpan={3}>No payments recorded for this month.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
   );
 }
 
@@ -1628,15 +1777,19 @@ function ExpiringSoonPanel({
   onEdit,
   onViewDetails,
   canManage,
+  id,
+  revealVersion = 0,
 }: {
   members: Member[];
   onEdit: (member: Member) => void;
   onViewDetails: (member: Member) => void;
   canManage: boolean;
+  id?: string;
+  revealVersion?: number;
 }) {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = usePanelOpen(revealVersion);
   return (
-    <article className={`panel expiring-panel collapsible-panel ${open ? "open" : "closed"}`}>
+    <article className={`panel expiring-panel collapsible-panel ${open ? "open" : "closed"}`} id={id} tabIndex={-1}>
       <div className="panel-head">
         <h3>Expiring Soon</h3>
         <button className="collapse-toggle" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
@@ -1681,6 +1834,9 @@ function ExpiringSoonPanel({
 }
 
 function MembersTable({
+  id = "members",
+  title = "Members & Fees",
+  onShowAll,
   members,
   onEdit,
   onDelete,
@@ -1690,6 +1846,9 @@ function MembersTable({
   onShare,
   canManage,
 }: {
+  id?: string;
+  title?: string;
+  onShowAll?: () => void;
   members: Member[];
   onEdit: (member: Member) => void;
   onDelete: (member: Member) => void;
@@ -1700,11 +1859,12 @@ function MembersTable({
   canManage: boolean;
 }) {
   return (
-    <article className="panel members-table" id="members">
+    <article className="panel members-table" id={id}>
       <div className="panel-head">
-        <h3>Members & Fees</h3>
+        <h3>{title} <span>({members.length})</span></h3>
         <div className="panel-actions">
-          <button className="share-button" onClick={onShare} aria-label="Share member list report" title="Share member list report">
+          {onShowAll && <button className="ghost" onClick={onShowAll}>Show all members</button>}
+          <button className="share-button" onClick={onShare} aria-label={`Share ${title.toLowerCase()} report`} title={`Share ${title.toLowerCase()} report`}>
             <Share2 size={15} />
           </button>
           <button className="ghost" onClick={onExport}><Download size={16} /> Export Excel</button>
@@ -1716,6 +1876,7 @@ function MembersTable({
             <tr><th>Name</th><th>Phone</th><th>Plan</th><th>Payment Due</th><th>Amount</th><th>Paid Up To</th><th>Days Overdue</th>{canManage && <th>Action</th>}</tr>
           </thead>
           <tbody>
+            {members.length === 0 && <tr><td colSpan={canManage ? 8 : 7}>No members to display.</td></tr>}
             {members.map((member) => (
               <tr key={member.id}>
                 <td>
@@ -1827,6 +1988,7 @@ function MobileDashboard({
   theme,
   onToggleTheme,
   onShareCollection,
+  onOpenMonth,
   onShareMembers,
   onShareOverdue,
 }: {
@@ -1864,9 +2026,33 @@ function MobileDashboard({
   theme: ThemeMode;
   onToggleTheme: () => void;
   onShareCollection: () => void;
+  onOpenMonth: (month: number) => void;
   onShareMembers: () => void;
   onShareOverdue: () => void;
 }) {
+  const [scrollRequest, setScrollRequest] = useState({ id: "", version: 0 });
+
+  function revealSection(id: string, nextView: MobileView = "dashboard") {
+    setView(nextView);
+    setScrollRequest((current) => ({ id, version: current.version + 1 }));
+  }
+
+  useEffect(() => {
+    if (!scrollRequest.id) return;
+    let secondFrame = 0;
+    const firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(() => {
+        const target = document.getElementById(scrollRequest.id);
+        target?.focus({ preventScroll: true });
+        target?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      window.cancelAnimationFrame(secondFrame);
+    };
+  }, [scrollRequest]);
+
   function navigate(nextView: MobileView) {
     setView(nextView);
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -1935,10 +2121,10 @@ function MobileDashboard({
           </section>
 
           <section className="mobile-stats">
-            <MiniStat label="Members" value={String(members.length)} icon={<Users />} tone="violet" />
-            <MiniStat label="Overdue" value={String(overdueMembers.length)} icon={<ShieldAlert />} tone="red" />
-            <MiniStat label="Overdue Amount" value={money(overdueAmount)} icon={<IndianRupee />} tone="orange" />
-            <MiniStat label="Expiring" value={String(expiringMembers.length)} icon={<CalendarClock />} tone="lime" />
+            <MiniStat label="Members" value={String(members.length)} icon={<Users />} tone="violet" onClick={() => revealSection("mobile-all-members", "members")} />
+            <MiniStat label="Overdue" value={String(overdueMembers.length)} icon={<ShieldAlert />} tone="red" onClick={() => revealSection("mobile-home-overdue")} />
+            <MiniStat label="Overdue Amount" value={money(overdueAmount)} icon={<IndianRupee />} tone="orange" onClick={() => revealSection("mobile-home-overdue-summary")} />
+            <MiniStat label="Expiring" value={String(expiringMembers.length)} icon={<CalendarClock />} tone="lime" onClick={() => revealSection("mobile-home-expiring")} />
           </section>
 
           <QuickActions
@@ -1949,9 +2135,11 @@ function MobileDashboard({
             onOverdue={() => navigate("overdue")}
           />
 
-          <OverdueSummary buckets={overdueBuckets} overdueCount={overdueMembers.length} />
+          <OverdueSummary id="mobile-home-overdue-summary" revealVersion={scrollRequest.id === "mobile-home-overdue-summary" ? scrollRequest.version : 0} buckets={overdueBuckets} overdueCount={overdueMembers.length} />
 
           <OverdueMembersPanel
+            id="mobile-home-overdue"
+            revealVersion={scrollRequest.id === "mobile-home-overdue" ? scrollRequest.version : 0}
             overdueMembers={overdueMembers}
             canManage={canManage}
             onEdit={onEdit}
@@ -1961,7 +2149,19 @@ function MobileDashboard({
             onShare={onShareOverdue}
           />
 
-          <ExpiringSoonPanel members={expiringMembers} onEdit={onEdit} onViewDetails={onViewDetails} canManage={canManage} />
+          <ExpiringSoonPanel id="mobile-home-expiring" revealVersion={scrollRequest.id === "mobile-home-expiring" ? scrollRequest.version : 0} members={expiringMembers} onEdit={onEdit} onViewDetails={onViewDetails} canManage={canManage} />
+          <CollectionReport
+            id="mobile-home-collection"
+            yearlyCollection={yearlyCollection}
+            selectedCollection={selectedCollection}
+            reportYear={reportYear}
+            reportYears={reportYears}
+            selectedReportMonth={selectedReportMonth}
+            setReportYear={setReportYear}
+            setSelectedReportMonth={setSelectedReportMonth}
+            onShare={onShareCollection}
+            onOpenMonth={onOpenMonth}
+          />
         </>
       )}
 
@@ -1997,6 +2197,7 @@ function MobileDashboard({
           setReportYear={setReportYear}
           setSelectedReportMonth={setSelectedReportMonth}
           onShare={onShareCollection}
+          onOpenMonth={onOpenMonth}
         />
       )}
 
@@ -2026,6 +2227,8 @@ function MobileDashboard({
 }
 
 function OverdueMembersPanel({
+  id,
+  revealVersion = 0,
   overdueMembers,
   canManage,
   onEdit,
@@ -2034,6 +2237,8 @@ function OverdueMembersPanel({
   onViewDetails,
   onShare,
 }: {
+  id?: string;
+  revealVersion?: number;
   overdueMembers: Member[];
   canManage: boolean;
   onEdit: (member: Member) => void;
@@ -2042,10 +2247,10 @@ function OverdueMembersPanel({
   onViewDetails: (member: Member) => void;
   onShare?: () => void;
 }) {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = usePanelOpen(revealVersion);
 
   return (
-    <article className={`panel mobile-members collapsible-panel ${open ? "open" : "closed"}`}>
+    <article id={id} tabIndex={-1} className={`panel mobile-members collapsible-panel ${open ? "open" : "closed"}`}>
       <div className="panel-head">
         <h3>Overdue Members</h3>
         <div className="panel-actions">
@@ -2111,7 +2316,7 @@ function MobileMembersScreen({
         {canManage && <button onClick={onAdd}><UserPlus size={16} /> Add</button>}
       </div>
 
-      <article className="panel mobile-members">
+      <article className="panel mobile-members" id="mobile-all-members" tabIndex={-1}>
         <div className="panel-head">
           <h3>All Members</h3>
           <div className="panel-actions">
@@ -2215,7 +2420,9 @@ function MobileCollectionScreen({
   setReportYear,
   setSelectedReportMonth,
   onShare,
+  onOpenMonth,
 }: {
+  onOpenMonth: (month: number) => void;
   yearlyCollection: MonthlyCollection[];
   selectedCollection: MonthlyCollection;
   reportYear: number;
@@ -2235,6 +2442,8 @@ function MobileCollectionScreen({
       </div>
 
       <CollectionReport
+        id="mobile-collection-report"
+        onOpenMonth={onOpenMonth}
         yearlyCollection={yearlyCollection}
         selectedCollection={selectedCollection}
         reportYear={reportYear}
@@ -2419,13 +2628,13 @@ function MobileDrawer({
   );
 }
 
-function MiniStat({ label, value, icon, tone }: { label: string; value: string; icon: React.ReactNode; tone: string }) {
+function MiniStat({ label, value, icon, tone, onClick }: { label: string; value: string; icon: React.ReactNode; tone: string; onClick: () => void }) {
   return (
-    <article className={`mini-stat ${tone}`}>
+    <button type="button" className={`mini-stat ${tone}`} onClick={onClick} aria-label={`View ${label.toLowerCase()}`}>
       {icon}
       <span>{label}</span>
       <strong>{value}</strong>
-    </article>
+    </button>
   );
 }
 

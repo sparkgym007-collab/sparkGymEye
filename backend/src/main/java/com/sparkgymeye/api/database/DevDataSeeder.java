@@ -56,7 +56,7 @@ public class DevDataSeeder implements CommandLineRunner {
         for (int index = 0; index < names.length; index += 1) {
             int planIndex = index % 3;
             int months = planIndex == 0 ? 1 : planIndex == 1 ? 3 : 6;
-            BigDecimal amount = planIndex == 0 ? BigDecimal.valueOf(600) : planIndex == 1 ? BigDecimal.valueOf(1400) : BigDecimal.valueOf(2600);
+            BigDecimal amount = planIndex == 0 ? BigDecimal.valueOf(500) : planIndex == 1 ? BigDecimal.valueOf(1400) : BigDecimal.valueOf(2600);
             LocalDate startedAt = LocalDate.of(2026, 8, 3 + (index % 18));
 
             Member member = new Member();
@@ -82,7 +82,7 @@ public class DevDataSeeder implements CommandLineRunner {
             for (int index = 0; index < count; index += 1) {
                 Member member = members.get((index + month) % members.size());
                 int months = index % 6 == 0 ? 6 : index % 3 == 0 ? 3 : 1;
-                BigDecimal amount = months == 6 ? BigDecimal.valueOf(2600) : months == 3 ? BigDecimal.valueOf(1400) : BigDecimal.valueOf(600);
+                BigDecimal amount = months == 6 ? BigDecimal.valueOf(2600) : months == 3 ? BigDecimal.valueOf(1400) : BigDecimal.valueOf(500);
 
                 Payment payment = new Payment();
                 payment.setRollNo(member.getRollNo());
